@@ -18,3 +18,7 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Internal planning / progress docs (not for public repo)
+plan.md
+PROGRESS.md
