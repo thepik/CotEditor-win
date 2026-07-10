@@ -13,6 +13,8 @@ export interface StatusbarState {
   dirty: boolean;
   line: number;
   column: number;
+  /** Active CotEditor syntax name, or null for plaintext. */
+  syntax: string | null;
 }
 
 export function updateStatusbar(state: StatusbarState): void {
@@ -22,9 +24,11 @@ export function updateStatusbar(state: StatusbarState): void {
   const name = state.path ? baseName(state.path) : t("status.untitled");
   const dirtyMark = state.dirty ? " ●" : "";
   const full = state.path ?? t("status.untitled");
+  const syntaxLabel = state.syntax ?? t("syntax.plainText");
 
   host.innerHTML =
     `<span class="sb-item sb-path" title="${escapeHtml(full)}">${escapeHtml(name)}${dirtyMark}</span>` +
+    `<span class="sb-item sb-syntax" title="${escapeHtml(t("menu.syntax"))}">${escapeHtml(syntaxLabel)}</span>` +
     `<span class="sb-item">${t("status.line")} ${state.line}, ${t("status.column")} ${state.column}</span>` +
     `<span class="sb-item">UTF-8</span>` +
     `<span class="sb-item">LF</span>`;

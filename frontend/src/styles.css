@@ -72,6 +72,29 @@ body {
   flex: 1;
 }
 
+/* Language switcher on the right edge of the toolbar. Styled to sit beside
+   the file buttons rather than look like a native OS control. */
+.toolbar-lang {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ce-fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.toolbar-lang:hover {
+  background: #e6e6e6;
+  border-color: #c0c0c0;
+}
+
+.toolbar-lang:focus {
+  outline: none;
+  border-color: var(--ce-accent, #3b82f6);
+}
+
 /* --- editor ---------------------------------------------------------------- */
 .editor-host {
   flex: 1 1 auto;
@@ -105,6 +128,11 @@ body {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.statusbar .sb-syntax {
+  opacity: 0.85;
+  font-weight: 500;
 }
 
 /* --- modal panels ---------------------------------------------------------- */

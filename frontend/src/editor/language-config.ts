@@ -79,6 +79,16 @@ export function monacoIdForSyntax(syntax: string): string | undefined {
 }
 
 /**
+ * All CotEditor syntax names that have a Monaco language integration
+ * (highlighting + language config). Derived from `SYNTAX_TO_MONACO` so the list
+ * can never drift from the actual integrations. Used to populate the toolbar
+ * language switcher.
+ */
+export const SUPPORTED_SYNTAXES: string[] = Object.keys(SYNTAX_TO_MONACO).sort(
+  (a, b) => a.localeCompare(b),
+);
+
+/**
  * Load every in-scope language's Edit.json and register its Monaco config.
  *
  * We fetch at runtime (rather than `import.meta.glob` eager imports) because the
@@ -194,5 +204,20 @@ export function setModelLanguageByPath(
     const syn = detectSyntaxByPath(path);
     if (syn) monacoId = SYNTAX_TO_MONACO[syn] ?? "plaintext";
   }
+  monacoNs.editor.setModelLanguage(model, monacoId);
+}
+
+/**
+ * Set the active model's language from an explicit CotEditor syntax name.
+ *
+ * Used by the toolbar language switcher for manual overrides. `null` (or an
+ * unknown syntax) resets the model to plaintext. The tree-sitter and regex
+ * highlight engines both listen on `model.onDidChangeLanguage`, so switching
+ * here triggers an automatic re-highlight.
+ */
+export function setModelLanguageBySyntax(syntax: string | null): void {
+  const model = getModel();
+  if (!model) return;
+  const monacoId = syntax ? monacoIdForSyntax(syntax) ?? "plaintext" : "plaintext";
   monacoNs.editor.setModelLanguage(model, monacoId);
 }

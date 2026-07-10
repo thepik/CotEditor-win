@@ -36,14 +36,6 @@ bloat or macOS-specific dependencies.
 The app icon is synthesized from the original CotEditor `AppIcon` (green rounded
 square + gears + pen). See `scripts/build-icon.mjs` for the compositing pipeline.
 
-## Why Wails (not Tauri / Electron)
-
-Originally scaffolded with Tauri, but migrated to **Wails v2 (Go)** because the
-target machine runs Windows **Smart App Control (SAC)** in enforcement mode, which
-blocks the `.exe` that Cargo generates for every crate build script (serde, libc,
-proc-macro2, …) with `os error 4551`. Wails on Windows is pure Go (no cgo, no build
-scripts), so its binaries pass SAC. Compared to Electron, Wails also produces a far
-smaller footprint (system WebView2 instead of a bundled Chromium).
 
 ## Tech stack
 

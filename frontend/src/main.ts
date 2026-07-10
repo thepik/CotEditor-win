@@ -16,7 +16,7 @@ import "./styles.css";
 import { setupMonaco, getEditor, getModel } from "./editor/monaco-setup";
 import { loadAllThemes, applyTheme, getCurrentTheme, listThemes } from "./editor/theme-loader";
 import { detectSyntaxByPath, initSyntaxMap, listSyntaxes } from "./lib/syntax-map";
-import { attachLanguage, setModelLanguageByPath } from "./editor/language-config";
+import { attachLanguage, setModelLanguageByPath, setModelLanguageBySyntax } from "./editor/language-config";
 import { registerHighlightProviders, attachModelChangeTracking } from "./editor/highlight-tree-sitter";
 import { registerRegexHighlight, refreshRegexTokens } from "./editor/highlight-regex";
 import { registerAllGrammars } from "./editor/grammar-registry";
@@ -40,6 +40,12 @@ import {
 let currentPath: string | null = null;
 /** True when the buffer has unsaved changes; drives the title `·` marker. */
 let dirty = false;
+/**
+ * The active CotEditor syntax name, or null for plaintext. Set by file
+ * detection on open/save and by manual selection in the toolbar switcher.
+ * Drives the toolbar select echo and the statusbar syntax label.
+ */
+let currentSyntax: string | null = null;
 
 async function bootstrap(): Promise<void> {
   // 1. Editor core.
@@ -82,8 +88,15 @@ async function bootstrap(): Promise<void> {
 
   // 3. UI.
   renderMenuBar(buildMenuBar());
-  wireToolbar({ onNew, onOpen, onSave, onSaveAs });
-  updateStatusbar({ path: currentPath, dirty, line: 1, column: 1 });
+  wireToolbar({
+    onNew,
+    onOpen,
+    onSave,
+    onSaveAs,
+    onSyntaxChange,
+    currentSyntax: () => currentSyntax,
+  });
+  updateStatusbar({ path: currentPath, dirty, line: 1, column: 1, syntax: currentSyntax });
 
   // Re-render the menu bar and document title when the UI language changes, so
   // a mid-session switch (View > Language) updates chrome live. The toolbar
@@ -102,6 +115,7 @@ async function bootstrap(): Promise<void> {
       dirty,
       line: pos?.lineNumber ?? 1,
       column: pos?.column ?? 1,
+      syntax: currentSyntax,
     });
   });
 
@@ -117,6 +131,7 @@ async function bootstrap(): Promise<void> {
       dirty,
       line: pos?.lineNumber ?? 1,
       column: pos?.column ?? 1,
+      syntax: currentSyntax,
     });
   });
   editor.onDidChangeCursorPosition((e) => {
@@ -125,6 +140,7 @@ async function bootstrap(): Promise<void> {
       dirty,
       line: e.position.lineNumber,
       column: e.position.column,
+      syntax: currentSyntax,
     });
   });
 
@@ -142,9 +158,10 @@ async function onNew(): Promise<void> {
   getModel()?.setValue("");
   currentPath = null;
   dirty = false;
+  currentSyntax = null;
   setModelLanguageByPath(null);
   updateTitle();
-  updateStatusbar({ path: currentPath, dirty, line: 1, column: 1 });
+  updateStatusbar({ path: currentPath, dirty, line: 1, column: 1, syntax: currentSyntax });
 }
 
 async function onOpen(): Promise<void> {
@@ -155,7 +172,10 @@ async function onOpen(): Promise<void> {
     dirty = false;
     if (result.path) {
       const syntax = detectSyntaxByPath(result.path);
+      currentSyntax = syntax;
       setModelLanguageByPath(result.path, syntax ?? undefined);
+    } else {
+      currentSyntax = null;
     }
     updateTitle();
     updateStatusbar({
@@ -163,6 +183,7 @@ async function onOpen(): Promise<void> {
       dirty,
       line: 1,
       column: 1,
+      syntax: currentSyntax,
     });
   } catch (err) {
     // "cancelled" is the Tauri signal when the user dismisses the dialog; in
@@ -180,6 +201,7 @@ async function onSave(): Promise<void> {
     dirty = false;
     if (savedTo) {
       const syntax = detectSyntaxByPath(savedTo);
+      currentSyntax = syntax;
       setModelLanguageByPath(savedTo, syntax ?? undefined);
     }
     updateTitle();
@@ -197,6 +219,7 @@ async function onSaveAs(): Promise<void> {
     dirty = false;
     if (savedTo) {
       const syntax = detectSyntaxByPath(savedTo);
+      currentSyntax = syntax;
       setModelLanguageByPath(savedTo, syntax ?? undefined);
     }
     updateTitle();
@@ -210,6 +233,28 @@ function isCancel(err: unknown): boolean {
   if (err === "cancelled") return true;
   if (err instanceof DOMException && err.name === "AbortError") return true;
   return false;
+}
+
+/**
+ * Apply a manual language override chosen from the toolbar switcher.
+ *
+ * Unlike file detection, this does not look at the path - it sets whatever the
+ * user picked, so e.g. a `.txt` can be highlighted as Python. The model's
+ * `onDidChangeLanguage` hook re-seeds the tree-sitter / regex highlighters
+ * automatically. `null` resets to plaintext.
+ */
+function onSyntaxChange(syntax: string | null): void {
+  currentSyntax = syntax;
+  setModelLanguageBySyntax(syntax);
+  const ed = getEditor();
+  const pos = ed?.getPosition();
+  updateStatusbar({
+    path: currentPath,
+    dirty,
+    line: pos?.lineNumber ?? 1,
+    column: pos?.column ?? 1,
+    syntax: currentSyntax,
+  });
 }
 
 /* -------------------------------- shortcuts ------------------------------- */

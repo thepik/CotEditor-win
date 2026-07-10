@@ -102,6 +102,7 @@ const dictEn: Record<string, string> = {
   "menu.theme": "Theme",
   "menu.help": "Help",
   "menu.language": "Language",
+  "menu.syntax": "Syntax",
 
   /* file menu */
   "file.new": "New",
@@ -162,6 +163,7 @@ const dictEn: Record<string, string> = {
   "status.untitled": "Untitled",
   "status.line": "Ln",
   "status.column": "Col",
+  "syntax.plainText": "Plain Text",
 
   /* title */
   "title.app": "CotEditor",
@@ -238,6 +240,7 @@ const dictZh: Record<string, string> = {
   "menu.theme": "主题",
   "menu.help": "帮助",
   "menu.language": "语言",
+  "menu.syntax": "语法",
 
   "file.new": "新建",
   "file.open": "打开…",
@@ -290,6 +293,7 @@ const dictZh: Record<string, string> = {
   "status.untitled": "未命名",
   "status.line": "行",
   "status.column": "列",
+  "syntax.plainText": "纯文本",
 
   "title.app": "CotEditor",
 
