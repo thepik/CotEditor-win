@@ -1,5 +1,7 @@
 # CotEditor for Windows
 
+**English** | [中文](./README.zh-CN.md)
+
 A lightweight, local-first text/code editor for Windows, re-implemented from the
 macOS [CotEditor](https://github.com/coteditor/CotEditor) design and resources.
 
