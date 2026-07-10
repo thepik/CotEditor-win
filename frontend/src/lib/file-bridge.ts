@@ -43,15 +43,23 @@ function fromWails(r: main.FileContent): FileContent {
 }
 
 async function wailsOpen(): Promise<FileContent> {
-  return fromWails(await WailsApp.OpenFile());
+  const result = fromWails(await WailsApp.OpenFile());
+  // The Go bridge represents a cancelled native picker with a nil path. Do
+  // not let that sentinel replace the current buffer with an empty document.
+  if (!result.path) throw cancelledError();
+  return result;
 }
 
 async function wailsSave(path: string, content: string): Promise<string> {
-  return WailsApp.SaveFile(path, content);
+  const savedTo = await WailsApp.SaveFile(path, content);
+  if (!savedTo) throw cancelledError();
+  return savedTo;
 }
 
 async function wailsSaveAs(content: string): Promise<string> {
-  return WailsApp.SaveAs(content);
+  const savedTo = await WailsApp.SaveAs(content);
+  if (!savedTo) throw cancelledError();
+  return savedTo;
 }
 
 /* ------------------------------ Browser path ------------------------------ */
@@ -60,6 +68,10 @@ async function wailsSaveAs(content: string): Promise<string> {
 // opened file so a subsequent "Save" (not "Save As") writes back to the same
 // file without re-prompting.
 let currentHandle: FileSystemFileHandle | null = null;
+
+function cancelledError(): DOMException {
+  return new DOMException("File picker cancelled", "AbortError");
+}
 
 function normalizeLe(s: string): "lf" | "crlf" | "cr" {
   return s === "crlf" || s === "cr" ? s : "lf";
@@ -142,4 +154,14 @@ export async function saveFile(
 export async function saveAsFile(content: string): Promise<string> {
   if (isWails()) return wailsSaveAs(content);
   return browserSaveAs(content);
+}
+
+/** Keep the native close guard in sync with the active frontend buffer. */
+export async function setDocumentState(
+  path: string | null,
+  dirty: boolean,
+  language: "en" | "zh",
+): Promise<void> {
+  if (!isWails()) return;
+  await WailsApp.SetDocumentState(path ?? "", dirty, language);
 }

@@ -13,7 +13,7 @@
  */
 
 import "./styles.css";
-import { setupMonaco, getEditor, getModel } from "./editor/monaco-setup";
+import { setupMonaco, getEditor, getModel, monaco } from "./editor/monaco-setup";
 import { loadAllThemes, applyTheme, getCurrentTheme, listThemes } from "./editor/theme-loader";
 import { detectSyntaxByPath, initSyntaxMap, listSyntaxes } from "./lib/syntax-map";
 import { attachLanguage, setModelLanguageByPath, setModelLanguageBySyntax } from "./editor/language-config";
@@ -21,19 +21,23 @@ import { registerHighlightProviders, attachModelChangeTracking } from "./editor/
 import { registerRegexHighlight, refreshRegexTokens } from "./editor/highlight-regex";
 import { registerAllGrammars } from "./editor/grammar-registry";
 import { wireToolbar } from "./ui/toolbar";
-import { updateStatusbar } from "./ui/statusbar";
+import { updateStatusbar, type SaveState } from "./ui/statusbar";
 import { registerLineCommands } from "./editor/line-commands";
 import { openSnippetManager, registerSnippetShortcuts } from "./ui/snippet-manager";
 import { registerFindShortcuts, openFind, openReplace } from "./ui/find-panel";
 import { openMultipleReplacePanel } from "./ui/multiple-replace-ui";
 import { renderMenuBar, closeMenu, type MenuBar, type MenuItem } from "./ui/menubar";
 import { t, onLangChange, getLang, setLang, langName, type Lang } from "./lib/i18n";
+import { confirmUnsavedChanges } from "./ui/confirm-dialog";
+import { showToast } from "./ui/notifications";
 import {
   openFile,
   saveFile,
   saveAsFile,
   resetFileHandle,
+  setDocumentState,
   isWails,
+  type FileContent,
 } from "./lib/file-bridge";
 
 /** Tracks the on-disk path/name of the current buffer, or null if untitled. */
@@ -46,6 +50,14 @@ let dirty = false;
  * Drives the toolbar select echo and the statusbar syntax label.
  */
 let currentSyntax: string | null = null;
+let currentEncoding = "UTF-8";
+let currentLineEnding: "LF" | "CRLF" | "CR" = "LF";
+let saveState: SaveState = "idle";
+let programmaticModelChange = false;
+let autosaveTimer: number | null = null;
+let saveInFlight: Promise<boolean> | null = null;
+
+const AUTOSAVE_DELAY_MS = 250;
 
 async function bootstrap(): Promise<void> {
   // 1. Editor core.
@@ -96,7 +108,7 @@ async function bootstrap(): Promise<void> {
     onSyntaxChange,
     currentSyntax: () => currentSyntax,
   });
-  updateStatusbar({ path: currentPath, dirty, line: 1, column: 1, syntax: currentSyntax });
+  refreshChrome();
 
   // Re-render the menu bar and document title when the UI language changes, so
   // a mid-session switch (View > Language) updates chrome live. The toolbar
@@ -105,127 +117,240 @@ async function bootstrap(): Promise<void> {
   onLangChange(() => {
     closeMenu();
     renderMenuBar(buildMenuBar());
-    updateTitle();
-    // Repaint the statusbar with the new language (its last state is captured
-    // by the cursor/content listeners; re-derive from the editor).
-    const ed = getEditor();
-    const pos = ed?.getPosition();
-    updateStatusbar({
-      path: currentPath,
-      dirty,
-      line: pos?.lineNumber ?? 1,
-      column: pos?.column ?? 1,
-      syntax: currentSyntax,
-    });
+    refreshChrome();
+    syncNativeDocumentState();
   });
 
   // Reflect buffer changes in the statusbar and dirty flag.
   model.onDidChangeContent(() => {
-    if (!dirty) {
-      dirty = true;
-      updateTitle();
-    }
-    const pos = editor.getPosition();
-    updateStatusbar({
-      path: currentPath,
-      dirty,
-      line: pos?.lineNumber ?? 1,
-      column: pos?.column ?? 1,
-      syntax: currentSyntax,
-    });
+    if (programmaticModelChange) return;
+    dirty = true;
+    saveState = currentPath ? "saving" : "unsaved";
+    refreshChrome();
+    syncNativeDocumentState();
+    if (currentPath) scheduleAutosave();
   });
-  editor.onDidChangeCursorPosition((e) => {
-    updateStatusbar({
-      path: currentPath,
-      dirty,
-      line: e.position.lineNumber,
-      column: e.position.column,
-      syntax: currentSyntax,
-    });
+  editor.onDidChangeCursorPosition((e: { position: { lineNumber: number; column: number } }) => {
+    refreshStatusbar(e.position.lineNumber, e.position.column);
   });
 
   // 4. File operations + shortcuts.
   registerShortcuts();
   registerFindShortcuts();
   registerSnippetShortcuts();
-  updateTitle();
+  // Browsers provide their own generic unload confirmation. The native Wails
+  // window uses App.beforeClose instead, avoiding two stacked prompts.
+  if (!isWails()) {
+    window.addEventListener("beforeunload", (event) => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+  }
+  window.addEventListener("blur", () => {
+    if (currentPath && dirty) void flushAutosave();
+  });
+  syncNativeDocumentState();
+  refreshChrome();
 }
 
 /* ----------------------------- file operations ---------------------------- */
 
 async function onNew(): Promise<void> {
+  if (!(await prepareToReplaceDocument())) return;
+  cancelAutosave();
   resetFileHandle();
-  getModel()?.setValue("");
-  currentPath = null;
-  dirty = false;
-  currentSyntax = null;
-  setModelLanguageByPath(null);
-  updateTitle();
-  updateStatusbar({ path: currentPath, dirty, line: 1, column: 1, syntax: currentSyntax });
+  applyDocument({
+    path: null,
+    content: "",
+    encoding: "UTF-8",
+    line_ending: "lf",
+  });
 }
 
 async function onOpen(): Promise<void> {
+  if (!(await prepareToReplaceDocument())) return;
   try {
     const result = await openFile();
-    getModel()?.setValue(result.content);
-    currentPath = result.path;
-    dirty = false;
-    if (result.path) {
-      const syntax = detectSyntaxByPath(result.path);
-      currentSyntax = syntax;
-      setModelLanguageByPath(result.path, syntax ?? undefined);
-    } else {
-      currentSyntax = null;
-    }
-    updateTitle();
-    updateStatusbar({
-      path: currentPath,
-      dirty,
-      line: 1,
-      column: 1,
-      syntax: currentSyntax,
-    });
+    cancelAutosave();
+    applyDocument(result);
   } catch (err) {
     // "cancelled" is the Tauri signal when the user dismisses the dialog; in
     // browser mode an AbortError is thrown instead. Both are expected.
-    if (!isCancel(err)) console.error("open failed:", err);
+    if (!isCancel(err)) {
+      console.error("open failed:", err);
+      showToast(t("error.openFailed") + errorMessage(err), "error");
+    }
   }
 }
 
-async function onSave(): Promise<void> {
+async function onSave(): Promise<boolean> {
   const model = getModel();
-  if (!model) return;
+  if (!model) return false;
+  if (currentPath) return flushAutosave();
+
   try {
-    const savedTo = await saveFile(currentPath, model.getValue());
-    currentPath = savedTo;
+    const savedTo = await saveFile(currentPath, contentForDisk(model.getValue()));
+    applySavedPath(savedTo);
     dirty = false;
-    if (savedTo) {
-      const syntax = detectSyntaxByPath(savedTo);
-      currentSyntax = syntax;
-      setModelLanguageByPath(savedTo, syntax ?? undefined);
-    }
-    updateTitle();
+    saveState = "saved";
+    syncNativeDocumentState();
+    refreshChrome();
+    return true;
   } catch (err) {
-    if (!isCancel(err)) console.error("save failed:", err);
+    if (!isCancel(err)) {
+      console.error("save failed:", err);
+      saveState = "error";
+      refreshChrome();
+      showToast(t("error.saveFailed") + errorMessage(err), "error");
+    }
+    return false;
   }
 }
 
-async function onSaveAs(): Promise<void> {
+async function onSaveAs(): Promise<boolean> {
   const model = getModel();
-  if (!model) return;
+  if (!model) return false;
+  cancelAutosave();
+  if (saveInFlight) await saveInFlight;
   try {
-    const savedTo = await saveAsFile(model.getValue());
-    currentPath = savedTo;
+    const savedTo = await saveAsFile(contentForDisk(model.getValue()));
+    applySavedPath(savedTo);
     dirty = false;
-    if (savedTo) {
-      const syntax = detectSyntaxByPath(savedTo);
-      currentSyntax = syntax;
-      setModelLanguageByPath(savedTo, syntax ?? undefined);
-    }
-    updateTitle();
+    saveState = "saved";
+    syncNativeDocumentState();
+    refreshChrome();
+    return true;
   } catch (err) {
-    if (!isCancel(err)) console.error("save as failed:", err);
+    if (!isCancel(err)) {
+      console.error("save as failed:", err);
+      saveState = "error";
+      refreshChrome();
+      showToast(t("error.saveFailed") + errorMessage(err), "error");
+    }
+    return false;
   }
+}
+
+function applyDocument(result: FileContent): void {
+  const model = getModel();
+  const editor = getEditor();
+  if (!model) return;
+
+  programmaticModelChange = true;
+  currentPath = result.path;
+  currentEncoding = result.encoding || "UTF-8";
+  currentLineEnding = result.line_ending.toUpperCase() as "LF" | "CRLF" | "CR";
+  dirty = false;
+  saveState = currentPath ? "saved" : "idle";
+  currentSyntax = currentPath ? detectSyntaxByPath(currentPath) : null;
+  model.setValue(result.content);
+  model.setEOL(
+    result.line_ending === "crlf"
+      ? monaco.editor.EndOfLineSequence.CRLF
+      : monaco.editor.EndOfLineSequence.LF,
+  );
+  setModelLanguageByPath(currentPath, currentSyntax ?? undefined);
+  editor?.setPosition({ lineNumber: 1, column: 1 });
+  editor?.revealLine(1);
+  programmaticModelChange = false;
+
+  syncNativeDocumentState();
+  refreshChrome();
+  editor?.focus();
+}
+
+function applySavedPath(savedTo: string): void {
+  currentPath = savedTo;
+  currentSyntax = detectSyntaxByPath(savedTo);
+  setModelLanguageByPath(savedTo, currentSyntax ?? undefined);
+}
+
+async function prepareToReplaceDocument(): Promise<boolean> {
+  if (!dirty) return true;
+
+  // Existing files should normally never interrupt the user: finish the live
+  // save immediately before switching documents. Only fall back to the dialog
+  // when the write failed.
+  if (currentPath && (await flushAutosave())) return true;
+
+  const name = currentPath ? baseName(currentPath) : t("status.untitled");
+  const decision = await confirmUnsavedChanges(name);
+  if (decision === "cancel") return false;
+  if (decision === "discard") return true;
+  return onSave();
+}
+
+function scheduleAutosave(): void {
+  cancelAutosave();
+  autosaveTimer = window.setTimeout(() => {
+    autosaveTimer = null;
+    void persistCurrentFile();
+  }, AUTOSAVE_DELAY_MS);
+}
+
+function cancelAutosave(): void {
+  if (autosaveTimer === null) return;
+  window.clearTimeout(autosaveTimer);
+  autosaveTimer = null;
+}
+
+async function flushAutosave(): Promise<boolean> {
+  cancelAutosave();
+  if (!currentPath || !dirty) return true;
+  return persistCurrentFile();
+}
+
+async function persistCurrentFile(): Promise<boolean> {
+  const model = getModel();
+  if (!model || !currentPath) return false;
+  if (!dirty) return true;
+
+  if (saveInFlight) {
+    await saveInFlight;
+    if (!dirty) return true;
+    return persistCurrentFile();
+  }
+
+  const path = currentPath;
+  const content = contentForDisk(model.getValue());
+  const version = model.getVersionId();
+  let failed = false;
+  saveState = "saving";
+  refreshChrome();
+
+  const operation = (async (): Promise<boolean> => {
+    try {
+      await saveFile(path, content);
+      if (currentPath !== path) return false;
+      if (model.getVersionId() === version) {
+        dirty = false;
+        saveState = "saved";
+        syncNativeDocumentState();
+        refreshChrome();
+        return true;
+      }
+      // More edits landed during the write. Keep the dirty state and let the
+      // caller schedule one coalesced follow-up write with the latest content.
+      return false;
+    } catch (err) {
+      failed = true;
+      dirty = true;
+      saveState = "error";
+      syncNativeDocumentState();
+      refreshChrome();
+      console.error("autosave failed:", err);
+      showToast(t("error.autosaveFailed") + errorMessage(err), "error");
+      return false;
+    }
+  })();
+
+  saveInFlight = operation;
+  const saved = await operation;
+  saveInFlight = null;
+
+  if (currentPath === path && dirty && !failed) scheduleAutosave();
+  return saved;
 }
 
 /** Heuristic: was the error just the user cancelling a picker? */
@@ -233,6 +358,43 @@ function isCancel(err: unknown): boolean {
   if (err === "cancelled") return true;
   if (err instanceof DOMException && err.name === "AbortError") return true;
   return false;
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  return String(err);
+}
+
+function contentForDisk(content: string): string {
+  const lf = content.replace(/\r\n|\r/g, "\n");
+  if (currentLineEnding === "CRLF") return lf.replace(/\n/g, "\r\n");
+  if (currentLineEnding === "CR") return lf.replace(/\n/g, "\r");
+  return lf;
+}
+
+function syncNativeDocumentState(): void {
+  void setDocumentState(currentPath, dirty, getLang()).catch((err) => {
+    console.warn("failed to sync document state:", err);
+  });
+}
+
+function refreshChrome(): void {
+  updateTitle();
+  refreshStatusbar();
+}
+
+function refreshStatusbar(line?: number, column?: number): void {
+  const pos = getEditor()?.getPosition();
+  updateStatusbar({
+    path: currentPath,
+    dirty,
+    line: line ?? pos?.lineNumber ?? 1,
+    column: column ?? pos?.column ?? 1,
+    syntax: currentSyntax,
+    encoding: currentEncoding,
+    lineEnding: currentLineEnding,
+    saveState,
+  });
 }
 
 /**
@@ -246,15 +408,7 @@ function isCancel(err: unknown): boolean {
 function onSyntaxChange(syntax: string | null): void {
   currentSyntax = syntax;
   setModelLanguageBySyntax(syntax);
-  const ed = getEditor();
-  const pos = ed?.getPosition();
-  updateStatusbar({
-    path: currentPath,
-    dirty,
-    line: pos?.lineNumber ?? 1,
-    column: pos?.column ?? 1,
-    syntax: currentSyntax,
-  });
+  refreshStatusbar();
 }
 
 /* -------------------------------- shortcuts ------------------------------- */

@@ -2,7 +2,7 @@
  * tree-sitter grammar registration.
  *
  * Maps each supported Monaco language id to:
- *  - the vendored grammar `.wasm` URL under `public/resources/grammars/`, and
+ *  - a grammar `.wasm` URL bundled from the `tree-sitter-wasms` package, and
  *  - the `highlights.scm` query URL under `public/resources/queries/<Folder>/`.
  *
  * The mapping mirrors the original CotEditor `TreeSitterSyntax` enum
@@ -17,6 +17,41 @@
  */
 
 import { registerGrammar } from "./highlight-tree-sitter";
+import bashWasmUrl from "tree-sitter-wasms/out/tree-sitter-bash.wasm?url";
+import cWasmUrl from "tree-sitter-wasms/out/tree-sitter-c.wasm?url";
+import cppWasmUrl from "tree-sitter-wasms/out/tree-sitter-cpp.wasm?url";
+import csharpWasmUrl from "tree-sitter-wasms/out/tree-sitter-c_sharp.wasm?url";
+import cssWasmUrl from "tree-sitter-wasms/out/tree-sitter-css.wasm?url";
+import goWasmUrl from "tree-sitter-wasms/out/tree-sitter-go.wasm?url";
+import htmlWasmUrl from "tree-sitter-wasms/out/tree-sitter-html.wasm?url";
+import javaWasmUrl from "tree-sitter-wasms/out/tree-sitter-java.wasm?url";
+import javascriptWasmUrl from "tree-sitter-wasms/out/tree-sitter-javascript.wasm?url";
+import kotlinWasmUrl from "tree-sitter-wasms/out/tree-sitter-kotlin.wasm?url";
+import phpWasmUrl from "tree-sitter-wasms/out/tree-sitter-php.wasm?url";
+import pythonWasmUrl from "tree-sitter-wasms/out/tree-sitter-python.wasm?url";
+import rubyWasmUrl from "tree-sitter-wasms/out/tree-sitter-ruby.wasm?url";
+import rustWasmUrl from "tree-sitter-wasms/out/tree-sitter-rust.wasm?url";
+import swiftWasmUrl from "tree-sitter-wasms/out/tree-sitter-swift.wasm?url";
+import typescriptWasmUrl from "tree-sitter-wasms/out/tree-sitter-typescript.wasm?url";
+
+const GRAMMAR_WASM_URLS: Record<string, string> = {
+  bash: bashWasmUrl,
+  c: cWasmUrl,
+  cpp: cppWasmUrl,
+  c_sharp: csharpWasmUrl,
+  css: cssWasmUrl,
+  go: goWasmUrl,
+  html: htmlWasmUrl,
+  java: javaWasmUrl,
+  javascript: javascriptWasmUrl,
+  kotlin: kotlinWasmUrl,
+  php: phpWasmUrl,
+  python: pythonWasmUrl,
+  ruby: rubyWasmUrl,
+  rust: rustWasmUrl,
+  swift: swiftWasmUrl,
+  typescript: typescriptWasmUrl,
+};
 
 interface GrammarMapping {
   /** Monaco language id this grammar highlights. */
@@ -70,10 +105,9 @@ export function registerAllGrammars(): void {
 }
 
 function grammarWasmUrl(wasmName: string): string {
-  return new URL(
-    `resources/grammars/tree-sitter-${wasmName}.wasm`,
-    window.location.href,
-  ).toString();
+  const url = GRAMMAR_WASM_URLS[wasmName];
+  if (!url) throw new Error(`Missing bundled grammar WASM: ${wasmName}`);
+  return url;
 }
 
 async function fetchQuery(folder: string): Promise<string> {

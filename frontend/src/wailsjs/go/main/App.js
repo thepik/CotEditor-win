@@ -17,3 +17,7 @@ export function SaveAs(arg1) {
 export function SaveFile(arg1, arg2) {
   return window['go']['main']['App']['SaveFile'](arg1, arg2);
 }
+
+export function SetDocumentState(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetDocumentState'](arg1, arg2, arg3);
+}

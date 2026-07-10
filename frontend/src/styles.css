@@ -1,19 +1,55 @@
-/* CotEditor-win global styles.
- *
- * The editor body is mostly Monaco's own chrome; these rules lay out the
- * toolbar / editor / statusbar rows and keep Monaco filling the window.
- */
+/* CotEditor-win application chrome. Monaco owns the editor canvas; these
+   tokens keep the surrounding controls coherent across light and dark themes. */
 
 :root {
-  --ce-bg: #ffffff;
-  --ce-fg: #1e1e1e;
-  --ce-toolbar-bg: #f3f3f3;
-  --ce-toolbar-border: #e0e0e0;
-  --ce-statusbar-bg: #007acc;
-  --ce-statusbar-fg: #ffffff;
-  --ce-toolbar-height: 38px;
-  --ce-statusbar-height: 24px;
-  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --ce-bg: #f6f7f9;
+  --ce-surface: #ffffff;
+  --ce-surface-raised: #ffffff;
+  --ce-fg: #202124;
+  --ce-muted: #666b73;
+  --ce-subtle: #8a9099;
+  --ce-toolbar-bg: #f7f8fa;
+  --ce-hover: #e9ebef;
+  --ce-active: #dde1e7;
+  --ce-border: #d9dde3;
+  --ce-border-strong: #c7ccd4;
+  --ce-accent: #0f6cbd;
+  --ce-accent-hover: #0d5ea5;
+  --ce-accent-fg: #ffffff;
+  --ce-danger: #c42b1c;
+  --ce-danger-soft: #fde7e5;
+  --ce-success: #16825d;
+  --ce-warning: #9d5d00;
+  --ce-menu-height: 31px;
+  --ce-toolbar-height: 42px;
+  --ce-statusbar-height: 27px;
+  --ce-radius: 6px;
+  --ce-shadow: 0 10px 30px rgba(20, 28, 40, 0.16), 0 2px 8px rgba(20, 28, 40, 0.1);
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+}
+
+:root[data-ce-theme="dark"] {
+  --ce-bg: #202124;
+  --ce-surface: #292a2d;
+  --ce-surface-raised: #303134;
+  --ce-fg: #e7e9ec;
+  --ce-muted: #b6bac1;
+  --ce-subtle: #92979f;
+  --ce-toolbar-bg: #252629;
+  --ce-hover: #383a3e;
+  --ce-active: #45484d;
+  --ce-border: #42454a;
+  --ce-border-strong: #555960;
+  --ce-accent: #4ca7e8;
+  --ce-accent-hover: #68b6ec;
+  --ce-accent-fg: #10212d;
+  --ce-danger: #ff897d;
+  --ce-danger-soft: #562822;
+  --ce-success: #65c9a5;
+  --ce-warning: #f2bd6a;
+  --ce-shadow: 0 14px 38px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
 }
 
 * {
@@ -22,12 +58,27 @@
 
 html,
 body {
-  margin: 0;
-  padding: 0;
   height: 100%;
+  margin: 0;
   overflow: hidden;
   background: var(--ce-bg);
   color: var(--ce-fg);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ce-accent) 72%, transparent);
+  outline-offset: 1px;
 }
 
 #app {
@@ -36,70 +87,190 @@ body {
   height: 100vh;
 }
 
-/* --- toolbar --------------------------------------------------------------- */
+/* --- menu bar ------------------------------------------------------------- */
+
+.ce-menubar {
+  height: var(--ce-menu-height);
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  padding: 0 5px;
+  background: var(--ce-toolbar-bg);
+  border-bottom: 1px solid var(--ce-border);
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.ce-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 4px;
+  cursor: default;
+}
+
+.ce-menu-item:hover,
+.ce-menu-item.open {
+  background: var(--ce-hover);
+}
+
+.ce-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 1px);
+  left: 0;
+  z-index: 1100;
+  min-width: 220px;
+  padding: 5px;
+  overflow: hidden;
+  background: var(--ce-surface-raised);
+  color: var(--ce-fg);
+  border: 1px solid var(--ce-border);
+  border-radius: 7px;
+  box-shadow: var(--ce-shadow);
+}
+
+.ce-menu-dropdown.align-right {
+  right: 0;
+  left: auto;
+}
+
+.ce-menu-dropdown button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 29px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ce-fg);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: default;
+}
+
+.ce-menu-dropdown button:hover,
+.ce-menu-dropdown button:focus-visible {
+  outline: 0;
+  background: var(--ce-accent);
+  color: var(--ce-accent-fg);
+}
+
+.ce-menu-dropdown button:disabled {
+  opacity: 0.42;
+}
+
+.ce-menu-dropdown .ce-menu-sep {
+  height: 1px;
+  margin: 4px 5px;
+  background: var(--ce-border);
+}
+
+.ce-menu-dropdown .ce-menu-shortcut {
+  margin-left: 28px;
+  color: var(--ce-subtle);
+  font-size: 11.5px;
+}
+
+.ce-menu-dropdown button:hover .ce-menu-shortcut,
+.ce-menu-dropdown button:focus-visible .ce-menu-shortcut {
+  color: inherit;
+  opacity: 0.82;
+}
+
+.ce-menu-dropdown .ce-menu-check {
+  display: inline-block;
+  width: 15px;
+  margin-right: 3px;
+}
+
+/* --- toolbar -------------------------------------------------------------- */
+
 .toolbar {
   height: var(--ce-toolbar-height);
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   padding: 0 8px;
   background: var(--ce-toolbar-bg);
-  border-bottom: 1px solid var(--ce-toolbar-border);
+  border-bottom: 1px solid var(--ce-border);
 }
 
-.toolbar button {
-  height: 28px;
-  padding: 0 12px;
+.toolbar-button {
+  height: 31px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--ce-radius);
   background: transparent;
   color: var(--ce-fg);
-  font-size: 13px;
-  cursor: pointer;
+  font-size: 12.5px;
+  cursor: default;
 }
 
-.toolbar button:hover {
-  background: #e6e6e6;
-  border-color: #d0d0d0;
+.toolbar-button:hover {
+  background: var(--ce-hover);
+  border-color: var(--ce-border);
 }
 
-.toolbar button:active {
-  background: #d0d0d0;
+.toolbar-button:active {
+  background: var(--ce-active);
+  transform: translateY(0.5px);
+}
+
+.toolbar-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .toolbar .spacer {
   flex: 1;
 }
 
-/* Language switcher on the right edge of the toolbar. Styled to sit beside
-   the file buttons rather than look like a native OS control. */
+.toolbar-syntax {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 10px;
+  border-left: 1px solid var(--ce-border);
+  color: var(--ce-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .toolbar-lang {
-  height: 28px;
-  padding: 0 6px;
-  border: 1px solid #d0d0d0;
-  border-radius: 4px;
-  background: transparent;
+  height: 30px;
+  min-width: 118px;
+  padding: 0 26px 0 9px;
+  border: 1px solid var(--ce-border-strong);
+  border-radius: var(--ce-radius);
+  background: var(--ce-surface);
   color: var(--ce-fg);
-  font-size: 13px;
-  cursor: pointer;
+  font-size: 12.5px;
+  cursor: default;
 }
 
 .toolbar-lang:hover {
-  background: #e6e6e6;
-  border-color: #c0c0c0;
+  border-color: var(--ce-accent);
 }
 
-.toolbar-lang:focus {
-  outline: none;
-  border-color: var(--ce-accent, #3b82f6);
-}
+/* --- editor --------------------------------------------------------------- */
 
-/* --- editor ---------------------------------------------------------------- */
 .editor-host {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  position: relative;
 }
 
 .editor-host .monaco-editor,
@@ -107,17 +278,20 @@ body {
   border-radius: 0;
 }
 
-/* --- statusbar ------------------------------------------------------------- */
+/* --- status bar ----------------------------------------------------------- */
+
 .statusbar {
   height: var(--ce-statusbar-height);
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 13px;
   padding: 0 10px;
-  background: var(--ce-statusbar-bg);
-  color: var(--ce-statusbar-fg);
-  font-size: 12px;
+  background: var(--ce-toolbar-bg);
+  color: var(--ce-muted);
+  border-top: 1px solid var(--ce-border);
+  font-size: 11.5px;
+  user-select: none;
 }
 
 .statusbar .sb-item {
@@ -125,18 +299,82 @@ body {
 }
 
 .statusbar .sb-path {
+  display: flex;
+  align-items: center;
+  min-width: 60px;
   flex: 1;
   overflow: hidden;
+  color: var(--ce-fg);
   text-overflow: ellipsis;
 }
 
+.sb-file-dot,
+.sb-save-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  margin-right: 7px;
+  border: 1px solid var(--ce-subtle);
+  border-radius: 50%;
+}
+
+.sb-file-dot.is-dirty {
+  border-color: var(--ce-warning);
+  background: var(--ce-warning);
+}
+
+.statusbar .sb-save {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sb-save[data-state="saved"] {
+  color: var(--ce-success);
+}
+
+.sb-save[data-state="saved"] .sb-save-dot {
+  border-color: var(--ce-success);
+  background: var(--ce-success);
+}
+
+.sb-save[data-state="saving"] .sb-save-dot {
+  border-color: var(--ce-accent);
+  border-top-color: transparent;
+  animation: ce-spin 0.8s linear infinite;
+}
+
+.sb-save[data-state="unsaved"] {
+  color: var(--ce-warning);
+}
+
+.sb-save[data-state="unsaved"] .sb-save-dot {
+  border-color: var(--ce-warning);
+  background: var(--ce-warning);
+}
+
+.sb-save[data-state="error"] {
+  color: var(--ce-danger);
+}
+
+.sb-save[data-state="error"] .sb-save-dot {
+  border-color: var(--ce-danger);
+  background: var(--ce-danger);
+}
+
 .statusbar .sb-syntax {
-  opacity: 0.85;
+  color: var(--ce-fg);
   font-weight: 500;
 }
 
-/* --- modal panels ---------------------------------------------------------- */
-/* Shared overlay used by the snippet manager and multiple-replace panels. */
+.statusbar .sb-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes ce-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* --- modal panels --------------------------------------------------------- */
 
 .ce-modal {
   position: fixed;
@@ -145,22 +383,25 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
+  padding: 20px;
+  background: rgba(8, 12, 18, 0.38);
   backdrop-filter: blur(2px);
+  animation: ce-fade-in 120ms ease-out;
 }
 
 .ce-modal-card {
   width: 560px;
   max-width: 90vw;
-  max-height: 80vh;
+  max-height: 82vh;
   display: flex;
   flex-direction: column;
-  background: var(--ce-bg);
-  color: var(--ce-fg);
-  border: 1px solid var(--ce-toolbar-border);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
   overflow: hidden;
+  background: var(--ce-surface-raised);
+  color: var(--ce-fg);
+  border: 1px solid var(--ce-border);
+  border-radius: 10px;
+  box-shadow: var(--ce-shadow);
+  animation: ce-card-in 140ms ease-out;
 }
 
 .ce-modal-card.ce-wide {
@@ -171,8 +412,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--ce-toolbar-border);
+  min-height: 45px;
+  padding: 8px 14px 8px 17px;
+  border-bottom: 1px solid var(--ce-border);
   background: var(--ce-toolbar-bg);
 }
 
@@ -183,99 +425,169 @@ body {
 }
 
 .ce-modal-close {
-  border: none;
+  width: 29px;
+  height: 29px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ce-radius);
   background: transparent;
-  font-size: 16px;
-  cursor: pointer;
-  color: var(--ce-fg);
-  padding: 2px 6px;
-  border-radius: 4px;
+  color: var(--ce-muted);
+  font-size: 14px;
+  cursor: default;
 }
 
 .ce-modal-close:hover {
-  background: #d0d0d0;
+  background: var(--ce-hover);
+  color: var(--ce-fg);
 }
 
 .ce-modal-body {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 14px;
+  padding: 16px;
 }
 
 .ce-modal-foot {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--ce-toolbar-border);
+  gap: 7px;
+  min-height: 49px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--ce-border);
   background: var(--ce-toolbar-bg);
 }
 
-.ce-modal-foot button {
-  height: 28px;
+.ce-modal-foot button,
+.ce-snippet-actions button {
+  height: 30px;
   padding: 0 12px;
-  border: 1px solid var(--ce-toolbar-border);
-  border-radius: 4px;
-  background: var(--ce-bg);
+  border: 1px solid var(--ce-border-strong);
+  border-radius: var(--ce-radius);
+  background: var(--ce-surface);
   color: var(--ce-fg);
-  font-size: 13px;
-  cursor: pointer;
+  font-size: 12.5px;
+  cursor: default;
 }
 
-.ce-modal-foot button:hover {
-  background: #e6e6e6;
+.ce-modal-foot button:hover,
+.ce-snippet-actions button:hover {
+  background: var(--ce-hover);
 }
 
 .ce-modal-foot .ce-primary {
-  background: var(--ce-statusbar-bg);
-  color: var(--ce-statusbar-fg);
-  border-color: var(--ce-statusbar-bg);
+  border-color: var(--ce-accent);
+  background: var(--ce-accent);
+  color: var(--ce-accent-fg);
+}
+
+.ce-modal-foot .ce-primary:hover {
+  border-color: var(--ce-accent-hover);
+  background: var(--ce-accent-hover);
+}
+
+.ce-modal-foot .ce-danger-text {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ce-danger);
+}
+
+.ce-modal-foot .ce-danger-text:hover {
+  background: var(--ce-danger-soft);
 }
 
 .ce-modal-foot .ce-spacer {
   flex: 1;
 }
 
-/* --- snippet manager ------------------------------------------------------- */
+/* Unsaved changes dialog */
+
+.ce-confirm {
+  z-index: 1300;
+}
+
+.ce-confirm-card {
+  width: 480px;
+}
+
+.ce-confirm-body {
+  display: flex;
+  gap: 15px;
+  padding: 22px 22px 20px;
+}
+
+.ce-confirm-icon {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ce-warning) 14%, transparent);
+  color: var(--ce-warning);
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.ce-confirm-copy h2 {
+  margin: 1px 0 8px;
+  font-size: 16px;
+  font-weight: 620;
+}
+
+.ce-confirm-copy p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ce-confirm-copy .ce-confirm-hint {
+  margin-top: 5px;
+  color: var(--ce-muted);
+  font-size: 12px;
+}
+
+/* --- snippet manager ------------------------------------------------------ */
 
 .ce-snippet-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .ce-snippet-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--ce-toolbar-border);
-  border-radius: 4px;
-  background: var(--ce-bg);
+  gap: 9px;
+  padding: 7px 8px;
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius);
+  background: var(--ce-surface);
 }
 
 .ce-snippet-row:hover {
-  background: #f7f7f7;
+  border-color: var(--ce-border-strong);
+  background: var(--ce-toolbar-bg);
 }
 
 .ce-snippet-slot {
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ce-statusbar-fg);
-  background: var(--ce-statusbar-bg);
-  border-radius: 4px;
   flex: 0 0 auto;
+  border-radius: 5px;
+  background: var(--ce-accent);
+  color: var(--ce-accent-fg);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .ce-snippet-name {
   flex: 1;
-  font-size: 13px;
   overflow: hidden;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -286,73 +598,75 @@ body {
 }
 
 .ce-snippet-actions button {
-  height: 24px;
+  height: 26px;
   padding: 0 8px;
-  font-size: 12px;
-  border: 1px solid var(--ce-toolbar-border);
-  border-radius: 4px;
-  background: var(--ce-bg);
-  color: var(--ce-fg);
-  cursor: pointer;
-}
-
-.ce-snippet-actions button:hover {
-  background: #e6e6e6;
+  font-size: 11.5px;
 }
 
 .ce-snippet-edit {
   margin-top: 12px;
-  padding: 12px;
-  border: 1px solid var(--ce-toolbar-border);
-  border-radius: 4px;
-  background: #fafafa;
+  padding: 13px;
+  border: 1px solid var(--ce-border);
+  border-radius: 7px;
+  background: var(--ce-toolbar-bg);
 }
 
 .ce-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
+  gap: 5px;
+  margin-bottom: 11px;
   font-size: 12px;
 }
 
 .ce-field span {
+  color: var(--ce-muted);
   font-weight: 600;
-  color: #555;
 }
 
 .ce-field input,
-.ce-field textarea {
+.ce-field textarea,
+.ce-mr-row input[type="text"] {
   width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--ce-toolbar-border);
-  border-radius: 4px;
-  font-family: inherit;
+  padding: 7px 9px;
+  border: 1px solid var(--ce-border-strong);
+  border-radius: var(--ce-radius);
+  background: var(--ce-surface);
+  color: var(--ce-fg);
   font-size: 13px;
+}
+
+.ce-field textarea {
   resize: vertical;
+}
+
+.ce-field input:hover,
+.ce-field textarea:hover,
+.ce-mr-row input[type="text"]:hover {
+  border-color: var(--ce-accent);
 }
 
 .ce-hint {
   margin: 0;
-  font-size: 11px;
-  color: #888;
+  color: var(--ce-muted);
+  font-size: 11.5px;
 }
 
 .ce-hint code {
-  background: #eee;
   padding: 1px 4px;
   border-radius: 3px;
+  background: var(--ce-hover);
   font-size: 11px;
 }
 
 .ce-empty {
-  color: #888;
+  padding: 24px;
+  color: var(--ce-muted);
   font-style: italic;
   text-align: center;
-  padding: 24px;
 }
 
-/* --- multiple replace ------------------------------------------------------ */
+/* --- multiple replace ----------------------------------------------------- */
 
 .ce-mr-table {
   width: 100%;
@@ -361,19 +675,19 @@ body {
 }
 
 .ce-mr-table th {
-  text-align: left;
-  padding: 6px 6px;
+  padding: 6px;
+  border-bottom: 1px solid var(--ce-border);
+  color: var(--ce-muted);
+  font-size: 11.5px;
   font-weight: 600;
-  color: #555;
-  border-bottom: 1px solid var(--ce-toolbar-border);
-  font-size: 12px;
+  text-align: left;
 }
 
 .ce-mr-table th.ce-mr-on,
 .ce-mr-table th.ce-mr-regex,
 .ce-mr-table th.ce-mr-case {
-  text-align: center;
   width: 44px;
+  text-align: center;
 }
 
 .ce-mr-table th.ce-mr-del {
@@ -381,8 +695,8 @@ body {
 }
 
 .ce-mr-row td {
-  padding: 4px 6px;
-  border-bottom: 1px solid #eee;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--ce-border);
   vertical-align: middle;
 }
 
@@ -391,16 +705,12 @@ body {
 }
 
 .ce-mr-row input[type="text"] {
-  width: 100%;
-  padding: 4px 6px;
-  border: 1px solid var(--ce-toolbar-border);
-  border-radius: 3px;
-  font-family: inherit;
-  font-size: 13px;
+  padding: 5px 7px;
 }
 
 .ce-mr-row input[type="checkbox"] {
-  cursor: pointer;
+  accent-color: var(--ce-accent);
+  cursor: default;
 }
 
 .ce-mr-on,
@@ -410,105 +720,140 @@ body {
 }
 
 .ce-mr-del button {
-  border: none;
-  background: transparent;
-  color: #c33;
-  cursor: pointer;
-  font-size: 14px;
   padding: 2px 6px;
-  border-radius: 3px;
-}
-
-.ce-mr-del button:hover {
-  background: #fee;
-}
-
-/* --- menu ------------------------------------------------------------------ */
-
-.ce-menubar {
-  height: var(--ce-toolbar-height);
-  flex: 0 0 auto;
-  display: flex;
-  align-items: stretch;
-  padding: 0 4px;
-  background: var(--ce-toolbar-bg);
-  border-bottom: 1px solid var(--ce-toolbar-border);
-  font-size: 13px;
-}
-
-.ce-menu-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.ce-menu-item:hover,
-.ce-menu-item.open {
-  background: #d0d0d0;
-}
-
-.ce-menu-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  min-width: 200px;
-  background: var(--ce-bg);
-  color: var(--ce-fg);
-  border: 1px solid var(--ce-toolbar-border);
+  border: 0;
   border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
-  z-index: 1100;
-  padding: 4px 0;
-}
-
-.ce-menu-dropdown button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 6px 14px;
-  border: none;
   background: transparent;
-  color: var(--ce-fg);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.ce-menu-dropdown button:hover,
-.ce-menu-dropdown button:focus {
-  background: var(--ce-statusbar-bg);
-  color: var(--ce-statusbar-fg);
-}
-
-.ce-menu-dropdown button:disabled {
-  opacity: 0.4;
+  color: var(--ce-danger);
+  font-size: 14px;
   cursor: default;
 }
 
-.ce-menu-dropdown .ce-menu-sep {
-  height: 1px;
-  margin: 4px 0;
-  background: var(--ce-toolbar-border);
+.ce-mr-del button:hover {
+  background: var(--ce-danger-soft);
 }
 
-.ce-menu-dropdown .ce-menu-shortcut {
-  margin-left: 24px;
-  color: #888;
-  font-size: 12px;
+/* --- non-blocking notifications ------------------------------------------ */
+
+.ce-toast-region {
+  position: fixed;
+  right: 14px;
+  bottom: calc(var(--ce-statusbar-height) + 12px);
+  z-index: 1500;
+  width: min(380px, calc(100vw - 28px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
 }
 
-.ce-menu-dropdown button:hover .ce-menu-shortcut,
-.ce-menu-dropdown button:focus .ce-menu-shortcut {
-  color: #cfe3f5;
+.ce-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid var(--ce-border);
+  border-left: 3px solid var(--ce-accent);
+  border-radius: 8px;
+  background: var(--ce-surface-raised);
+  box-shadow: var(--ce-shadow);
+  color: var(--ce-fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+  pointer-events: auto;
+  animation: ce-toast-in 160ms ease-out;
 }
 
-.ce-menu-dropdown .ce-menu-check {
-  display: inline-block;
-  width: 14px;
-  margin-right: 2px;
+.ce-toast-error {
+  border-left-color: var(--ce-danger);
 }
 
+.ce-toast-mark {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--ce-danger-soft);
+  color: var(--ce-danger);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ce-toast-copy {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.ce-toast-close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ce-muted);
+  font-size: 17px;
+  line-height: 1;
+  cursor: default;
+}
+
+.ce-toast-close:hover {
+  background: var(--ce-hover);
+}
+
+.ce-toast-leave {
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+@keyframes ce-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes ce-card-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.992); }
+}
+
+@keyframes ce-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+@media (max-width: 720px) {
+  .toolbar-label,
+  .toolbar-syntax > span {
+    display: none;
+  }
+
+  .toolbar-button {
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .toolbar-lang {
+    min-width: 105px;
+  }
+
+  .statusbar {
+    gap: 9px;
+  }
+
+  .statusbar .sb-meta {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

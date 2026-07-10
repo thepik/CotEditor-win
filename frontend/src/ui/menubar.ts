@@ -73,10 +73,12 @@ function runAction(a: MenuAction): void {
 }
 
 let openItem: HTMLElement | null = null;
+let globalListenersInstalled = false;
 /** Close whichever dropdown is currently open. */
 export function closeMenu(): void {
   if (openItem) {
     openItem.classList.remove("open");
+    openItem.setAttribute("aria-expanded", "false");
     const dd = openItem.querySelector(".ce-menu-dropdown");
     if (dd) dd.remove();
     openItem = null;
@@ -88,12 +90,17 @@ export function renderMenuBar(menus: MenuBar): void {
   const host = document.getElementById("menubar");
   if (!host) return;
   host.innerHTML = "";
+  host.setAttribute("role", "menubar");
+  host.setAttribute("aria-label", "Application menu");
 
   for (const menu of menus) {
     const item = document.createElement("div");
     item.className = "ce-menu-item";
     item.tabIndex = 0;
     item.textContent = menu.label;
+    item.setAttribute("role", "menuitem");
+    item.setAttribute("aria-haspopup", "menu");
+    item.setAttribute("aria-expanded", "false");
 
     item.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -112,18 +119,39 @@ export function renderMenuBar(menus: MenuBar): void {
       }
     });
 
+    item.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+        e.preventDefault();
+        openDropdown(item, menu, true);
+        return;
+      }
+      if (e.key === "Escape") {
+        closeMenu();
+        return;
+      }
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      const all = [...host.querySelectorAll<HTMLElement>(".ce-menu-item")];
+      const index = all.indexOf(item);
+      const offset = e.key === "ArrowRight" ? 1 : -1;
+      all[(index + offset + all.length) % all.length]?.focus();
+    });
+
     host.appendChild(item);
   }
 
-  // Click anywhere outside dismisses the open dropdown.
-  document.addEventListener("click", closeMenu);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeMenu();
-  });
+  if (!globalListenersInstalled) {
+    globalListenersInstalled = true;
+    // Click anywhere outside dismisses the open dropdown.
+    document.addEventListener("click", closeMenu);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeMenu();
+    });
+  }
 }
 
 /** Open `menu`'s dropdown under the given top-level item element. */
-function openDropdown(item: HTMLElement, menu: Menu): void {
+function openDropdown(item: HTMLElement, menu: Menu, focusFirst = false): void {
   closeMenu();
 
   // Use the lazy builder when present so dynamic content (e.g. theme
@@ -132,6 +160,7 @@ function openDropdown(item: HTMLElement, menu: Menu): void {
 
   const dd = document.createElement("div");
   dd.className = "ce-menu-dropdown";
+  dd.setAttribute("role", "menu");
 
   for (const mi of items) {
     if (isSeparator(mi)) {
@@ -143,6 +172,8 @@ function openDropdown(item: HTMLElement, menu: Menu): void {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.disabled = !!mi.disabled;
+    btn.setAttribute("role", "menuitem");
+    btn.tabIndex = -1;
 
     const left = document.createElement("span");
     left.className = "ce-menu-label";
@@ -172,6 +203,33 @@ function openDropdown(item: HTMLElement, menu: Menu): void {
   }
 
   item.classList.add("open");
+  item.setAttribute("aria-expanded", "true");
   item.appendChild(dd);
   openItem = item;
+
+  // Keep menus usable near the right window edge and support conventional
+  // arrow-key navigation inside the open dropdown.
+  if (dd.getBoundingClientRect().right > window.innerWidth - 4) {
+    dd.classList.add("align-right");
+  }
+  const buttons = [...dd.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+  buttons.forEach((button, index) => {
+    button.addEventListener("keydown", (event) => {
+      let next = index;
+      if (event.key === "ArrowDown") next = (index + 1) % buttons.length;
+      else if (event.key === "ArrowUp") next = (index - 1 + buttons.length) % buttons.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = buttons.length - 1;
+      else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        closeMenu();
+        item.focus();
+        item.dispatchEvent(new KeyboardEvent("keydown", { key: event.key }));
+        return;
+      } else return;
+      event.preventDefault();
+      buttons[next]?.focus();
+    });
+  });
+  if (focusFirst) buttons[0]?.focus();
 }

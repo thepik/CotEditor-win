@@ -125,6 +125,64 @@ const report = await page.evaluate(async () => {
   };
 });
 
+// File-safety interaction checks. Browser mode uses an in-memory File System
+// Access API mock so this verifies the same frontend state machine without
+// touching the developer's disk.
+await page.evaluate(() => {
+  window.__mockFileWrites = [];
+  const handle = {
+    name: "existing.txt",
+    async getFile() {
+      return { name: "existing.txt", async text() { return "initial content\n"; } };
+    },
+    async createWritable() {
+      return {
+        async write(text) { window.__mockFileWrites.push(String(text)); },
+        async close() {},
+      };
+    },
+  };
+  window.__mockFileHandle = handle;
+  window.showOpenFilePicker = async () => [handle];
+  window.showSaveFilePicker = async () => handle;
+});
+
+await page.locator('[data-command="new"]').click();
+const unsavedPromptShown = await page.locator(".ce-confirm-card").isVisible();
+const beforeCancel = await page.evaluate(async () => (await import("/src/editor/monaco-setup.ts")).getModel()?.getValue());
+await page.locator('[data-decision="cancel"]').click();
+const afterCancel = await page.evaluate(async () => (await import("/src/editor/monaco-setup.ts")).getModel()?.getValue());
+
+await page.locator('[data-command="new"]').click();
+await page.locator('[data-decision="discard"]').click();
+const afterDiscard = await page.evaluate(async () => (await import("/src/editor/monaco-setup.ts")).getModel()?.getValue());
+
+await page.locator('[data-command="open"]').click();
+await page.waitForFunction(() => document.getElementById("statusbar")?.textContent?.includes("existing.txt"));
+await page.evaluate(async () => {
+  (await import("/src/editor/monaco-setup.ts")).getModel()?.setValue("edited content\n");
+});
+await page.waitForFunction(() => window.__mockFileWrites?.includes("edited content\n"));
+const autosaveState = await page.locator(".sb-save").getAttribute("data-state");
+
+// Cancelling Open must preserve the current buffer (the old implementation
+// accidentally replaced it with an empty untitled document in Wails mode).
+await page.evaluate(() => {
+  window.showOpenFilePicker = async () => { throw new DOMException("cancelled", "AbortError"); };
+});
+await page.locator('[data-command="open"]').click();
+await page.waitForTimeout(100);
+const afterOpenCancel = await page.evaluate(async () => (await import("/src/editor/monaco-setup.ts")).getModel()?.getValue());
+
+report.fileSafety = {
+  unsavedPromptShown,
+  cancelPreserved: beforeCancel === afterCancel,
+  discardCleared: afterDiscard === "",
+  autosaveWrote: await page.evaluate(() => window.__mockFileWrites?.includes("edited content\n") ?? false),
+  autosaveState,
+  openCancelPreserved: afterOpenCancel === "edited content\n",
+};
+
 console.log("=== RUNTIME REPORT (" + URL + ") ===");
 console.log(JSON.stringify(report, null, 2));
 console.log("\n=== ERRORS ===");
@@ -163,6 +221,12 @@ if (!menusMatch) {
 // Line commands must be registered on the editor instance.
 const missingCmds = report.lineCommands.filter((c) => !c.ok).map((c) => c.id);
 if (missingCmds.length) failures.push(`line commands missing: ${missingCmds.join(", ")}`);
+if (!report.fileSafety.unsavedPromptShown) failures.push("unsaved prompt missing");
+if (!report.fileSafety.cancelPreserved) failures.push("cancel discarded content");
+if (!report.fileSafety.discardCleared) failures.push("discard did not create blank document");
+if (!report.fileSafety.autosaveWrote) failures.push("existing-file autosave missing");
+if (report.fileSafety.autosaveState !== "saved") failures.push(`autosave state ${report.fileSafety.autosaveState}`);
+if (!report.fileSafety.openCancelPreserved) failures.push("cancelled open replaced content");
 console.log("\n=== ASSERTIONS ===");
 console.log(failures.length ? "FAIL: " + failures.join("; ") : "ALL PASS");
 process.exit(failures.length ? 1 : 0);

@@ -135,7 +135,7 @@ frontend/
     themes/                  13 .cottheme files
     syntaxes/                19 .cotsyntax bundles (+ Csharp/Cpp aliases)
     queries/                 tree-sitter .scm highlight/outline/injection queries
-    grammars/                tree-sitter grammar WASMs (gitignored, fetched)
+    grammars/                legacy local tree-sitter WASM override (optional)
     SyntaxMap.json           file-type auto-detection map
   vite.config.ts, tsconfig.json, package.json
 build/
@@ -154,7 +154,7 @@ All syntax themes, `.cotsyntax` bundles, and tree-sitter `.scm` queries are
 copied verbatim from the original CotEditor and served as static files. The
 tree-sitter grammar WASMs come from the
 [`tree-sitter-wasms`](https://www.npmjs.com/package/tree-sitter-wasms) npm
-package (gitignored; run `npm install` to fetch).
+package and are bundled directly by Vite when dependencies are installed.
 
 > **Special-character aliases:** the `C#` and `C++` bundles/queries contain `#`
 > and `+`, which break URL path resolution in the dev server (`#` is read as a

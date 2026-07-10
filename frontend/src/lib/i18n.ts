@@ -164,6 +164,22 @@ const dictEn: Record<string, string> = {
   "status.line": "Ln",
   "status.column": "Col",
   "syntax.plainText": "Plain Text",
+  "status.unsaved": "Not saved",
+  "status.saving": "Saving…",
+  "status.saved": "Saved",
+  "status.saveError": "Save failed",
+
+  /* unsaved changes + file feedback */
+  "unsaved.title": "Save your changes?",
+  "unsaved.message": "“{name}” has changes that haven't been saved.",
+  "unsaved.hint": "Your changes will be lost if you continue without saving.",
+  "unsaved.save": "Save",
+  "unsaved.discard": "Don't Save",
+  "unsaved.cancel": "Cancel",
+  "error.openFailed": "Could not open the file: ",
+  "error.saveFailed": "Could not save the file: ",
+  "error.autosaveFailed": "Automatic save failed: ",
+  "common.close": "Close",
 
   /* title */
   "title.app": "CotEditor",
@@ -294,6 +310,21 @@ const dictZh: Record<string, string> = {
   "status.line": "行",
   "status.column": "列",
   "syntax.plainText": "纯文本",
+  "status.unsaved": "尚未保存",
+  "status.saving": "正在保存…",
+  "status.saved": "已保存",
+  "status.saveError": "保存失败",
+
+  "unsaved.title": "要保存更改吗？",
+  "unsaved.message": "“{name}”包含尚未保存的更改。",
+  "unsaved.hint": "如果不保存就继续，这些编辑内容将会丢失。",
+  "unsaved.save": "保存",
+  "unsaved.discard": "不保存",
+  "unsaved.cancel": "取消",
+  "error.openFailed": "无法打开文件：",
+  "error.saveFailed": "无法保存文件：",
+  "error.autosaveFailed": "自动保存失败：",
+  "common.close": "关闭",
 
   "title.app": "CotEditor",
 

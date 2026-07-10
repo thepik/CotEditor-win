@@ -201,11 +201,13 @@ function themeIsDark(theme: CotTheme): boolean {
 
 /** Switch the active Monaco theme by display name. */
 export function applyTheme(name: string): void {
-  if (!themeRegistry.has(name)) {
+  const theme = themeRegistry.get(name);
+  if (!theme) {
     console.warn(`Unknown theme: ${name}`);
     return;
   }
   setMonacoTheme(monacoThemeId(name));
+  document.documentElement.dataset.ceTheme = themeIsDark(theme) ? "dark" : "light";
   currentTheme = name;
 }
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -17,11 +18,16 @@ import (
 // the generated `frontend/wailsjs/go/main/App.js` bindings.
 type App struct {
 	ctx context.Context
+
+	stateMu       sync.RWMutex
+	documentPath  string
+	documentDirty bool
+	language      string
 }
 
 // NewApp creates a new App application struct.
 func NewApp() *App {
-	return &App{}
+	return &App{language: "zh"}
 }
 
 // startup is called at application start; we save the context so dialog
@@ -110,6 +116,65 @@ func (a *App) NewFile() (FileContent, error) {
 		Encoding:   "UTF-8",
 		LineEnding: "lf",
 	}, nil
+}
+
+// SetDocumentState mirrors the small piece of editor state needed by the
+// native window-close guard. Existing documents are normally auto-saved by the
+// frontend; keeping the transient dirty state here also protects the short
+// interval while a write is still in flight.
+func (a *App) SetDocumentState(path string, dirty bool, language string) {
+	a.stateMu.Lock()
+	a.documentPath = path
+	a.documentDirty = dirty
+	if language == "en" || language == "zh" {
+		a.language = language
+	}
+	a.stateMu.Unlock()
+}
+
+// beforeClose asks for confirmation whenever the frontend reports changes
+// that have not reached disk yet. Returning true cancels the close in Wails.
+func (a *App) beforeClose(ctx context.Context) bool {
+	a.stateMu.RLock()
+	path := a.documentPath
+	dirty := a.documentDirty
+	language := a.language
+	a.stateMu.RUnlock()
+
+	if !dirty {
+		return false
+	}
+
+	title := "未保存的更改"
+	message := "未命名文档尚未保存。关闭窗口将丢失编辑内容，确定要关闭吗？"
+	closeLabel := "不保存并关闭"
+	cancelLabel := "取消"
+	if path != "" {
+		message = "最新更改尚未完成写入。现在关闭可能会丢失部分编辑内容，确定要关闭吗？"
+	}
+	if language == "en" {
+		title = "Unsaved Changes"
+		message = "The untitled document has not been saved. Closing now will discard your changes."
+		closeLabel = "Close Without Saving"
+		cancelLabel = "Cancel"
+		if path != "" {
+			message = "The latest changes have not finished saving. Closing now may discard some edits."
+		}
+	}
+
+	selection, err := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+		Type:          runtime.QuestionDialog,
+		Title:         title,
+		Message:       message,
+		Buttons:       []string{closeLabel, cancelLabel},
+		DefaultButton: cancelLabel,
+		CancelButton:  cancelLabel,
+	})
+	if err != nil {
+		// A failed dialog must never silently discard user content.
+		return true
+	}
+	return selection != closeLabel
 }
 
 // readFileAt reads a file, decodes as UTF-8 and detects line endings.

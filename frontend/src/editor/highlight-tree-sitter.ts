@@ -27,16 +27,17 @@ import { monaco as monacoNs, getModel, getEditor } from "./monaco-setup";
 
 /** web-tree-sitter is loaded lazily; the WASM core ships in the npm package. */
 import type * as TreeSitter from "web-tree-sitter";
+import treeSitterWasmUrl from "web-tree-sitter/tree-sitter.wasm?url";
 let ParserModule: typeof TreeSitter | null = null;
 let parserInitPromise: Promise<void> | null = null;
 
 /**
  * Initialise the web-tree-sitter core.
  *
- * The runtime `tree-sitter.wasm` is served from the vendored grammar dir so we
- * don't depend on the bundler resolving the `.wasm` import inside node_modules.
- * `Parser.init` accepts an Emscripten module options object whose `locateFile`
- * callback remaps the core wasm path.
+ * The runtime `tree-sitter.wasm` is imported through Vite so it is fingerprinted
+ * and copied into both development and packaged builds. `Parser.init` accepts
+ * an Emscripten module options object whose `locateFile` callback remaps the
+ * core WASM path to that bundled URL.
  */
 async function ensureParser(): Promise<typeof TreeSitter> {
   if (!ParserModule) {
@@ -45,13 +46,11 @@ async function ensureParser(): Promise<typeof TreeSitter> {
   if (!parserInitPromise) {
     parserInitPromise = ParserModule.Parser.init({
       locateFile: (path: string) => {
-        // web-tree-sitter asks for `tree-sitter.wasm` relative to the document;
-        // serve our copy from /resources/grammars.
+        // Let Vite copy and fingerprint the runtime WASM from the installed
+        // package. This works in both dev and packaged builds and avoids a
+        // fragile, gitignored public/resources/grammars copy step.
         if (path.endsWith("tree-sitter.wasm")) {
-          return new URL(
-            "resources/grammars/tree-sitter.wasm",
-            window.location.href,
-          ).toString();
+          return treeSitterWasmUrl;
         }
         return path;
       },

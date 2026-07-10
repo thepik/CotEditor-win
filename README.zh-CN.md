@@ -131,7 +131,7 @@ frontend/
     themes/                  13 个 .cottheme 文件
     syntaxes/                19 个 .cotsyntax 捆绑包（+ Csharp/Cpp 别名）
     queries/                 tree-sitter .scm 高亮/大纲/注入查询
-    grammars/                tree-sitter 语法 WASM（已 gitignore，需拉取）
+    grammars/                旧版 tree-sitter WASM 本地覆盖目录（可选）
     SyntaxMap.json           文件类型自动检测映射
   vite.config.ts, tsconfig.json, package.json
 build/
@@ -149,7 +149,7 @@ scripts/
 所有语法主题、`.cotsyntax` 捆绑包以及 tree-sitter `.scm` 查询均逐字复制自
 原始 CotEditor，并以静态文件形式提供。tree-sitter 语法 WASM 来自
 [`tree-sitter-wasms`](https://www.npmjs.com/package/tree-sitter-wasms) npm
-包（已 gitignore；运行 `npm install` 拉取）。
+包，并在安装依赖后由 Vite 直接打包，无需再手动复制到公共资源目录。
 
 > **特殊字符别名：** `C#` 与 `C++` 捆绑包/查询中包含 `#` 和 `+`，会破坏开发
 > 服务器中的 URL 路径解析（`#` 会被当作片段标识符）。它们旁边保留了安全名称
