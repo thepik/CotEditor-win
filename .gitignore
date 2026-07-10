@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build output (binaries + generated installer temp)
+dist/
+frontend/dist/
+build/bin/
+build/windows/installer/tmp/
+
+# Vendored tree-sitter grammar WASMs (fetched, not vendored in repo)
+frontend/public/resources/grammars/*.wasm
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/extensions.json
+.idea/

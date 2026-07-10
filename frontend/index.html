@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>CotEditor</title>
+  </head>
+  <body>
+    <!-- Monaco mounts here; toolbar and panels are inserted around it by main.ts -->
+    <div id="app">
+      <div id="menubar" class="ce-menubar"></div>
+      <div id="toolbar" class="toolbar"></div>
+      <div id="editor" class="editor-host"></div>
+      <div id="statusbar" class="statusbar"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

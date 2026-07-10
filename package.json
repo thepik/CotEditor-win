@@ -1,0 +1,18 @@
+{
+  "name": "coteditor-win-devtools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dev tooling for CotEditor-win (smoke tests). The actual frontend lives in frontend/.",
+  "type": "module",
+  "scripts": {
+    "build:icon": "node scripts/build-icon.mjs",
+    "smoke": "node scripts/smoke-test.mjs http://localhost:34115/",
+    "smoke:browser": "node scripts/smoke-test.mjs http://127.0.0.1:1420/"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "playwright": "^1.61.1",
+    "png-to-ico": "^3.0.2",
+    "sharp": "^0.35.3"
+  }
+}
