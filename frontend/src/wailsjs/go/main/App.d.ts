@@ -6,8 +6,12 @@ export function NewFile():Promise<main.FileContent>;
 
 export function OpenFile():Promise<main.FileContent>;
 
+export function OpenPath(arg1:string):Promise<main.FileContent>;
+
 export function SaveAs(arg1:string):Promise<string>;
 
 export function SaveFile(arg1:string,arg2:string):Promise<string>;
 
 export function SetDocumentState(arg1:string,arg2:boolean,arg3:string):Promise<void>;
+
+export function StartupFile():Promise<any>;

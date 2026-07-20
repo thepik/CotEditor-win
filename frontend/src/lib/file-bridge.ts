@@ -62,6 +62,30 @@ async function wailsSaveAs(content: string): Promise<string> {
   return savedTo;
 }
 
+/**
+ * Returns the file path passed on the command line when the app was launched
+ * (e.g. double-clicking a file in Explorer), or null if none. Wails-only;
+ * the browser dev path never has a startup file.
+ */
+export async function startupFile(): Promise<string | null> {
+  if (!isWails()) return null;
+  const path = await WailsApp.StartupFile();
+  return path ?? null;
+}
+
+/**
+ * Loads a file at the given absolute path without prompting. Used by the
+ * "app:open-path" event handler when a second instance forwards its
+ * command-line file to the running window.
+ */
+export async function openPath(path: string): Promise<FileContent> {
+  if (!isWails()) {
+    throw new Error("openPath is only available inside the Wails native window.");
+  }
+  const result = fromWails(await WailsApp.OpenPath(path));
+  return result;
+}
+
 /* ------------------------------ Browser path ------------------------------ */
 
 // The File System Access API keeps a FileSystemFileHandle that we cache per

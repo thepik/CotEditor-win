@@ -38,6 +38,17 @@ func main() {
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
 		},
+		// SingleInstanceLock ensures only one CotEditor process runs at a time.
+		// When a second instance is launched (e.g. the user double-clicks
+		// another file while CotEditor is already open), Wails forwards its
+		// command-line args to this callback and exits the second instance;
+		// the running window then loads the requested file via an event.
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "coteditor-win-thepik-v1",
+			OnSecondInstanceLaunch: func(data options.SecondInstanceData) {
+				app.handleSecondInstance(data.Args)
+			},
+		},
 	})
 
 	if err != nil {

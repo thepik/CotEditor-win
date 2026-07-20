@@ -23,6 +23,13 @@ type App struct {
 	documentPath  string
 	documentDirty bool
 	language      string
+
+	// startupFile is the file path passed on the command line when the app is
+	// launched (e.g. double-clicking a .md file in Explorer). Empty when no
+	// file was requested. The frontend queries it once via StartupFile() after
+	// bootstrap to decide whether to load a document instead of showing an
+	// empty buffer.
+	startupFile string
 }
 
 // NewApp creates a new App application struct.
@@ -34,6 +41,25 @@ func NewApp() *App {
 // methods can use it later.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.startupFile = parseFileArg(os.Args[1:])
+}
+
+// parseFileArg returns the first non-flag command-line argument that points to
+// an existing file, or "" if none. Flag-like args (starting with "-") are
+// skipped so future options won't be mistaken for a file path.
+func parseFileArg(args []string) string {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if info, err := os.Stat(arg); err == nil && !info.IsDir() {
+			if abs, err := filepath.Abs(arg); err == nil {
+				return abs
+			}
+			return arg
+		}
+	}
+	return ""
 }
 
 // FileContent mirrors the original Rust `FileContent` struct and the TS
@@ -48,6 +74,42 @@ type FileContent struct {
 	Encoding string `json:"encoding"`
 	// Line ending detected in the file: "lf", "crlf" or "cr".
 	LineEnding string `json:"line_ending"`
+}
+
+// StartupFile returns the file path requested on the command line when the app
+// was launched (e.g. double-clicking a file in Explorer), or nil if none. The
+// frontend calls this once after bootstrap to load the initial document.
+func (a *App) StartupFile() (*string, error) {
+	if a.startupFile == "" {
+		return nil, nil
+	}
+	path := a.startupFile
+	return &path, nil
+}
+
+// OpenPath loads a file at the given absolute path without prompting. Used by
+// the frontend when a second instance launches and forwards its command-line
+// file to the running instance via the "app:open-path" event.
+func (a *App) OpenPath(path string) (FileContent, error) {
+	if path == "" {
+		return FileContent{}, os.ErrInvalid
+	}
+	return readFileAt(path)
+}
+
+// handleSecondInstance is invoked by Wails' SingleInstanceLock when another
+// process is started while this instance is already running. The second
+// instance's command-line args are forwarded here; we extract the first file
+// path (if any) and emit an event to the frontend so it can load the file in
+// the existing window instead of launching a new one.
+func (a *App) handleSecondInstance(args []string) {
+	path := parseFileArg(args)
+	if path == "" {
+		return
+	}
+	// a.ctx is guaranteed to be set: OnStartup runs before any second instance
+	// can reach the running window.
+	runtime.EventsEmit(a.ctx, "app:open-path", path)
 }
 
 // OpenFile prompts the user with a native open dialog and returns the selected

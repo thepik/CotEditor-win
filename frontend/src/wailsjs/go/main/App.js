@@ -10,6 +10,10 @@ export function OpenFile() {
   return window['go']['main']['App']['OpenFile']();
 }
 
+export function OpenPath(arg1) {
+  return window['go']['main']['App']['OpenPath'](arg1);
+}
+
 export function SaveAs(arg1) {
   return window['go']['main']['App']['SaveAs'](arg1);
 }
@@ -20,4 +24,8 @@ export function SaveFile(arg1, arg2) {
 
 export function SetDocumentState(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetDocumentState'](arg1, arg2, arg3);
+}
+
+export function StartupFile() {
+  return window['go']['main']['App']['StartupFile']();
 }

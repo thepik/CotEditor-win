@@ -20,7 +20,7 @@ import { attachLanguage, setModelLanguageByPath, setModelLanguageBySyntax } from
 import { registerHighlightProviders, attachModelChangeTracking } from "./editor/highlight-tree-sitter";
 import { registerRegexHighlight, refreshRegexTokens } from "./editor/highlight-regex";
 import { registerAllGrammars } from "./editor/grammar-registry";
-import { wireToolbar } from "./ui/toolbar";
+import { wireToolbar, renderToolbar } from "./ui/toolbar";
 import { updateStatusbar, type SaveState } from "./ui/statusbar";
 import { registerLineCommands } from "./editor/line-commands";
 import { openSnippetManager, registerSnippetShortcuts } from "./ui/snippet-manager";
@@ -37,8 +37,11 @@ import {
   resetFileHandle,
   setDocumentState,
   isWails,
+  startupFile,
+  openPath,
   type FileContent,
 } from "./lib/file-bridge";
+import * as WailsRuntime from "./wailsjs/runtime/runtime";
 
 /** Tracks the on-disk path/name of the current buffer, or null if untitled. */
 let currentPath: string | null = null;
@@ -50,6 +53,12 @@ let dirty = false;
  * Drives the toolbar select echo and the statusbar syntax label.
  */
 let currentSyntax: string | null = null;
+/**
+ * Snapshot of `currentSyntax` at the last time the toolbar was rendered. Used
+ * by `refreshChrome` to avoid rebuilding the toolbar (and disrupting the
+ * language <select>) unless the syntax has actually changed.
+ */
+let lastRenderedSyntax: string | null | undefined = undefined;
 let currentEncoding = "UTF-8";
 let currentLineEnding: "LF" | "CRLF" | "CR" = "LF";
 let saveState: SaveState = "idle";
@@ -152,6 +161,52 @@ async function bootstrap(): Promise<void> {
   });
   syncNativeDocumentState();
   refreshChrome();
+
+  // 5. Initial document from a command-line file (e.g. double-clicking a
+  // file in Explorer launches the app with the path as argv[1]). On a fresh
+  // start with no args, startupFile() resolves null and we keep the empty
+  // untitled buffer shown above.
+  void loadStartupFile();
+
+  // When the app is already running and a second instance is launched with a
+  // file path, the Go SingleInstanceLock forwards the path here. We load it
+  // into the existing window, honouring the same dirty-guard as a manual open.
+  if (isWails()) {
+    WailsRuntime.EventsOn("app:open-path", (path: unknown) => {
+      if (typeof path !== "string" || path === "") return;
+      void openExternalPath(path);
+    });
+  }
+}
+
+/** Loads the file passed on the command line at launch, if any. */
+async function loadStartupFile(): Promise<void> {
+  let path: string | null;
+  try {
+    path = await startupFile();
+  } catch (err) {
+    console.error("startupFile failed:", err);
+    return;
+  }
+  if (!path) return;
+  // On first launch the buffer is empty and clean, so we skip the dirty guard.
+  await openExternalPath(path, { skipDirtyGuard: true });
+}
+
+/** Opens a file by absolute path (startup arg or second-instance forward). */
+async function openExternalPath(
+  path: string,
+  opts: { skipDirtyGuard?: boolean } = {},
+): Promise<void> {
+  if (!opts.skipDirtyGuard && !(await prepareToReplaceDocument())) return;
+  try {
+    const result = await openPath(path);
+    cancelAutosave();
+    applyDocument(result);
+  } catch (err) {
+    console.error("open path failed:", err);
+    showToast(t("error.openFailed") + errorMessage(err), "error");
+  }
 }
 
 /* ----------------------------- file operations ---------------------------- */
@@ -381,6 +436,14 @@ function syncNativeDocumentState(): void {
 function refreshChrome(): void {
   updateTitle();
   refreshStatusbar();
+  // The toolbar language <select> only mirrors `currentSyntax`, so only
+  // re-render it when the syntax actually changes. This avoids rebuilding the
+  // toolbar (and dropping the open <select> dropdown / focus) on every
+  // keystroke that flows through refreshChrome via onDidChangeContent.
+  if (lastRenderedSyntax !== currentSyntax) {
+    lastRenderedSyntax = currentSyntax;
+    renderToolbar();
+  }
 }
 
 function refreshStatusbar(line?: number, column?: number): void {
