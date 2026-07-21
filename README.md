@@ -32,6 +32,8 @@ bloat or macOS-specific dependencies.
 - **Bilingual UI** — Chinese / English interface with live switching (View → 语言).
 - **File operations** — open / save / save-as / new via native dialogs, with dirty
   marker and UTF-8 encoding.
+- **Document status** — live line and character totals, cursor offset/current line,
+  on-disk byte size, Unicode (UTF-8) encoding, and line-ending display.
 
 ## Screenshots
 
