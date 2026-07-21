@@ -128,6 +128,7 @@ const dictEn: Record<string, string> = {
   "view.zoomIn": "Zoom In",
   "view.zoomOut": "Zoom Out",
   "view.language": "Language",
+  "view.togglePreview": "Toggle Preview",
 
   /* format menu */
   "format.sortLines": "Sort Lines",
@@ -158,6 +159,11 @@ const dictEn: Record<string, string> = {
   "toolbar.open": "Open…",
   "toolbar.save": "Save",
   "toolbar.saveAs": "Save As…",
+  "toolbar.edit": "Edit",
+  "toolbar.preview": "Preview",
+
+  /* preview */
+  "preview.empty": "Nothing to preview",
 
   /* statusbar */
   "status.untitled": "Untitled",
@@ -283,6 +289,7 @@ const dictZh: Record<string, string> = {
   "view.zoomIn": "放大",
   "view.zoomOut": "缩小",
   "view.language": "界面语言",
+  "view.togglePreview": "切换预览",
 
   "format.sortLines": "排序行",
   "format.sortLinesDesc": "排序行（降序）",
@@ -309,6 +316,11 @@ const dictZh: Record<string, string> = {
   "toolbar.open": "打开…",
   "toolbar.save": "保存",
   "toolbar.saveAs": "另存为…",
+  "toolbar.edit": "编辑",
+  "toolbar.preview": "预览",
+
+  /* preview */
+  "preview.empty": "暂无内容可预览",
 
   "status.untitled": "未命名",
   "status.line": "行",

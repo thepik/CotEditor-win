@@ -265,6 +265,208 @@ textarea:focus-visible,
   border-color: var(--ce-accent);
 }
 
+/* --- toolbar mode toggle (Edit / Preview) --------------------------------- */
+
+.toolbar-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 2px;
+  border: 1px solid var(--ce-border-strong);
+  border-radius: var(--ce-radius);
+  background: var(--ce-surface);
+  margin-right: 10px;
+}
+
+.toolbar-mode-btn {
+  height: 24px;
+  min-width: 44px;
+  padding: 0 10px;
+  border: none;
+  border-radius: calc(var(--ce-radius) - 2px);
+  background: transparent;
+  color: var(--ce-muted);
+  font-size: 12px;
+  cursor: default;
+  transition: background 0.08s ease, color 0.08s ease;
+}
+
+.toolbar-mode-btn:hover {
+  color: var(--ce-fg);
+}
+
+.toolbar-mode-btn[data-active="true"] {
+  background: var(--ce-active);
+  color: var(--ce-fg);
+}
+
+/* --- preview panel -------------------------------------------------------- */
+/* Obsidian-style Reading View: a single centered column of readable width
+   with theme-aware typography. Sits absolutely over the editor host so the
+   Monaco editor keeps its layout state while hidden. */
+
+.preview-host {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: var(--ce-bg);
+  padding: 28px 24px 64px;
+  color: var(--ce-fg);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.preview-host[hidden] {
+  display: none;
+}
+
+.preview-body {
+  max-width: 768px;
+  margin: 0 auto;
+}
+
+.preview-body :first-child {
+  margin-top: 0;
+}
+
+.preview-body h1,
+.preview-body h2,
+.preview-body h3,
+.preview-body h4,
+.preview-body h5,
+.preview-body h6 {
+  margin: 1.6em 0 0.6em;
+  line-height: 1.3;
+  font-weight: 600;
+  color: var(--ce-fg);
+}
+
+.preview-body h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--ce-border);
+}
+
+.preview-body h2 {
+  font-size: 1.45em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--ce-border);
+}
+
+.preview-body h3 { font-size: 1.25em; }
+.preview-body h4 { font-size: 1.1em; }
+.preview-body h5 { font-size: 1em; }
+.preview-body h6 {
+  font-size: 0.92em;
+  color: var(--ce-muted);
+}
+
+.preview-body p,
+.preview-body ul,
+.preview-body ol,
+.preview-body blockquote,
+.preview-body pre,
+.preview-body table,
+.preview-body figure {
+  margin: 0 0 1em;
+}
+
+.preview-body ul,
+.preview-body ol {
+  padding-left: 1.7em;
+}
+
+.preview-body li {
+  margin: 0.25em 0;
+}
+
+.preview-body li > p {
+  margin: 0;
+}
+
+.preview-body a {
+  color: var(--ce-accent);
+  text-decoration: none;
+}
+
+.preview-body a:hover {
+  text-decoration: underline;
+}
+
+.preview-body blockquote {
+  margin: 0 0 1em;
+  padding: 0.4em 1em;
+  border-left: 3px solid var(--ce-accent);
+  background: var(--ce-hover);
+  color: var(--ce-muted);
+  border-radius: 0 var(--ce-radius) var(--ce-radius) 0;
+}
+
+.preview-body blockquote > :first-child {
+  margin-top: 0;
+}
+
+.preview-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.preview-body code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.88em;
+  padding: 0.15em 0.4em;
+  background: var(--ce-hover);
+  border-radius: 4px;
+}
+
+.preview-body pre {
+  padding: 14px 16px;
+  background: var(--ce-surface);
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius);
+  overflow: auto;
+}
+
+.preview-body pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 0.86em;
+  line-height: 1.5;
+}
+
+.preview-body hr {
+  margin: 1.6em 0;
+  border: none;
+  border-top: 1px solid var(--ce-border);
+}
+
+.preview-body table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.94em;
+}
+
+.preview-body th,
+.preview-body td {
+  padding: 6px 12px;
+  border: 1px solid var(--ce-border);
+  text-align: left;
+}
+
+.preview-body th {
+  background: var(--ce-hover);
+  font-weight: 600;
+}
+
+.preview-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+.preview-body .preview-empty {
+  color: var(--ce-subtle);
+  font-style: italic;
+}
+
 /* --- editor --------------------------------------------------------------- */
 
 .editor-host {
@@ -865,6 +1067,10 @@ textarea:focus-visible,
 
   .toolbar-lang {
     min-width: 105px;
+  }
+
+  .preview-host {
+    padding: 16px 14px 40px;
   }
 
   .statusbar {

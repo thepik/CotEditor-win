@@ -1,12 +1,16 @@
 /**
- * Top toolbar: New / Open / Save / Save As buttons + a language switcher
- * (`<select>`) on the right edge, mirroring the original CotEditor's
- * top-right syntax picker.
+ * Top toolbar: New / Open / Save / Save As buttons, an optional Edit/Preview
+ * mode toggle, and a language switcher (`<select>`) on the right edge,
+ * mirroring the original CotEditor's top-right syntax picker.
  *
  * Built with plain DOM (no framework, per PLAN §二). `wireToolbar` renders the
  * buttons and the language `<select>` once into `#toolbar` and binds handlers to
  * the supplied callbacks (which live in main.ts so they can drive file IO and
  * the model's language).
+ *
+ * The Edit/Preview segmented toggle is only rendered when `isPreviewAvailable`
+ * reports true (i.e. the current buffer is Markdown), matching Obsidian's
+ * behaviour where the Reading View toggle is meaningful only for markdown.
  *
  * Button labels are i18n-driven and re-render on language switch via
  * `renderToolbar`, keeping the stored callbacks intact.
@@ -14,6 +18,8 @@
 
 import { t, onLangChange } from "../lib/i18n";
 import { SUPPORTED_SYNTAXES } from "../editor/language-config";
+
+export type ViewMode = "edit" | "preview";
 
 export interface ToolbarActions {
   onNew: () => void | Promise<void>;
@@ -24,6 +30,12 @@ export interface ToolbarActions {
   onSyntaxChange: (syntax: string | null) => void;
   /** Read the active syntax name (or null for plaintext), to echo in the select. */
   currentSyntax: () => string | null;
+  /** Switch the editor/preview panel. */
+  onModeChange: (mode: ViewMode) => void;
+  /** Read the active view mode, to echo the toggle's highlight. */
+  currentMode: () => ViewMode;
+  /** Whether the preview toggle should be shown (current file is Markdown). */
+  isPreviewAvailable: () => boolean;
 }
 
 /** The actions bound at `wireToolbar` time, retained for re-rendering. */
@@ -64,6 +76,31 @@ export function renderToolbar(): void {
   const spacer = document.createElement("div");
   spacer.className = "spacer";
   host.appendChild(spacer);
+
+  // Edit/Preview segmented toggle. Only shown when the current buffer is
+  // Markdown (per `isPreviewAvailable`); hidden otherwise to keep the toolbar
+  // clean for non-markdown files. The active segment mirrors `currentMode`.
+  if (actions.isPreviewAvailable()) {
+    const modeWrap = document.createElement("div");
+    modeWrap.className = "toolbar-mode";
+    modeWrap.setAttribute("role", "group");
+    modeWrap.setAttribute("aria-label", t("view.togglePreview"));
+
+    const current = actions.currentMode();
+    for (const mode of ["edit", "preview"] as const) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "toolbar-mode-btn";
+      btn.dataset.mode = mode;
+      btn.textContent = mode === "edit" ? t("toolbar.edit") : t("toolbar.preview");
+      btn.title = mode === "edit" ? t("toolbar.edit") : t("toolbar.preview");
+      btn.setAttribute("aria-pressed", String(current === mode));
+      if (current === mode) btn.dataset.active = "true";
+      btn.addEventListener("click", () => actions!.onModeChange(mode));
+      modeWrap.appendChild(btn);
+    }
+    host.appendChild(modeWrap);
+  }
 
   // Language switcher on the right edge. A native <select> keeps the
   // implementation small and is keyboard/screen-reader friendly; the

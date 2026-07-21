@@ -20,8 +20,9 @@ import { attachLanguage, setModelLanguageByPath, setModelLanguageBySyntax } from
 import { registerHighlightProviders, attachModelChangeTracking } from "./editor/highlight-tree-sitter";
 import { registerRegexHighlight, refreshRegexTokens } from "./editor/highlight-regex";
 import { registerAllGrammars } from "./editor/grammar-registry";
-import { wireToolbar, renderToolbar } from "./ui/toolbar";
+import { wireToolbar, renderToolbar, type ViewMode } from "./ui/toolbar";
 import { updateStatusbar, type SaveState } from "./ui/statusbar";
+import { renderPreview, schedulePreviewRender, showPreview, hidePreview } from "./ui/preview";
 import { registerLineCommands } from "./editor/line-commands";
 import { openSnippetManager, registerSnippetShortcuts } from "./ui/snippet-manager";
 import { registerFindShortcuts, openFind, openReplace } from "./ui/find-panel";
@@ -59,6 +60,17 @@ let currentSyntax: string | null = null;
  * language <select>) unless the syntax has actually changed.
  */
 let lastRenderedSyntax: string | null | undefined = undefined;
+/**
+ * Snapshot of `viewMode` at the last toolbar render, so `refreshChrome` only
+ * rebuilds the toolbar when the mode (or syntax) actually changes.
+ */
+let lastRenderedMode: ViewMode | undefined = undefined;
+/**
+ * Active view mode: `"edit"` shows the Monaco editor, `"preview"` shows the
+ * rendered markdown panel. Only meaningful when `currentSyntax === "Markdown"`;
+ * switching to a non-markdown file resets this to `"edit"`.
+ */
+let viewMode: ViewMode = "edit";
 let currentEncoding = "UTF-8";
 let currentLineEnding: "LF" | "CRLF" | "CR" = "LF";
 let saveState: SaveState = "idle";
@@ -116,6 +128,9 @@ async function bootstrap(): Promise<void> {
     onSaveAs,
     onSyntaxChange,
     currentSyntax: () => currentSyntax,
+    onModeChange: setViewMode,
+    currentMode: () => viewMode,
+    isPreviewAvailable: () => currentSyntax === "Markdown",
   });
   refreshChrome();
 
@@ -138,6 +153,11 @@ async function bootstrap(): Promise<void> {
     refreshChrome();
     syncNativeDocumentState();
     if (currentPath) scheduleAutosave();
+    // Live-update the preview pane while it is visible. Coalesced via rAF
+    // inside schedulePreviewRender so a burst of keystrokes repaints once.
+    if (viewMode === "preview" && currentSyntax === "Markdown") {
+      schedulePreviewRender(model.getValue());
+    }
   });
   editor.onDidChangeCursorPosition((e: { position: { lineNumber: number; column: number } }) => {
     refreshStatusbar(e.position.lineNumber, e.position.column);
@@ -310,6 +330,18 @@ function applyDocument(result: FileContent): void {
   editor?.revealLine(1);
   programmaticModelChange = false;
 
+  // Preview mode is only valid for Markdown. When the new document is not
+  // markdown, drop out of preview so we never show a stale render; when it
+  // is markdown, refresh the preview pane if it happens to be open.
+  if (currentSyntax !== "Markdown") {
+    if (viewMode === "preview") {
+      viewMode = "edit";
+      hidePreview();
+    }
+  } else if (viewMode === "preview") {
+    renderPreview(result.content);
+  }
+
   syncNativeDocumentState();
   refreshChrome();
   editor?.focus();
@@ -436,12 +468,14 @@ function syncNativeDocumentState(): void {
 function refreshChrome(): void {
   updateTitle();
   refreshStatusbar();
-  // The toolbar language <select> only mirrors `currentSyntax`, so only
-  // re-render it when the syntax actually changes. This avoids rebuilding the
-  // toolbar (and dropping the open <select> dropdown / focus) on every
-  // keystroke that flows through refreshChrome via onDidChangeContent.
-  if (lastRenderedSyntax !== currentSyntax) {
+  // The toolbar language <select> and the Edit/Preview toggle mirror
+  // `currentSyntax` and `viewMode`. Only re-render when either actually
+  // changes; this avoids rebuilding the toolbar (and dropping the open
+  // <select> dropdown / focus) on every keystroke that flows through
+  // refreshChrome via onDidChangeContent.
+  if (lastRenderedSyntax !== currentSyntax || lastRenderedMode !== viewMode) {
     lastRenderedSyntax = currentSyntax;
+    lastRenderedMode = viewMode;
     renderToolbar();
   }
 }
@@ -479,11 +513,43 @@ function refreshStatusbar(line?: number, column?: number): void {
  * user picked, so e.g. a `.txt` can be highlighted as Python. The model's
  * `onDidChangeLanguage` hook re-seeds the tree-sitter / regex highlighters
  * automatically. `null` resets to plaintext.
+ *
+ * Preview mode is only valid for Markdown; switching away from Markdown
+ * forces the view back to edit so a stale preview pane is never shown.
  */
 function onSyntaxChange(syntax: string | null): void {
   currentSyntax = syntax;
   setModelLanguageBySyntax(syntax);
+  if (syntax !== "Markdown" && viewMode === "preview") {
+    setViewMode("edit");
+  }
   refreshStatusbar();
+  refreshChrome();
+}
+
+/**
+ * Switch between the Monaco editor and the markdown preview panel.
+ *
+ * Entering preview renders the current buffer once and hides the editor;
+ * leaving preview refocuses the editor. The toolbar is refreshed so the
+ * segmented toggle reflects the new mode. No-op when the requested mode
+ * equals the current one, or when preview is requested for a non-markdown
+ * buffer (the toggle UI hides that case, but this guards menu/shortcut
+ * entry points too).
+ */
+function setViewMode(mode: ViewMode): void {
+  if (mode === viewMode) return;
+  if (mode === "preview" && currentSyntax !== "Markdown") return;
+  viewMode = mode;
+  if (mode === "preview") {
+    const model = getModel();
+    renderPreview(model?.getValue() ?? "");
+    showPreview();
+  } else {
+    hidePreview();
+    queueMicrotask(() => getEditor()?.focus());
+  }
+  refreshChrome();
 }
 
 /* -------------------------------- shortcuts ------------------------------- */
@@ -511,6 +577,14 @@ function registerShortcuts(): void {
         if (e.altKey) {
           e.preventDefault();
           openSnippetManager();
+        }
+        break;
+      case "e":
+        // Toggle Edit/Preview for markdown buffers (mirrors the View menu
+        // item and the toolbar segmented control).
+        if (currentSyntax === "Markdown") {
+          e.preventDefault();
+          setViewMode(viewMode === "edit" ? "preview" : "edit");
         }
         break;
     }
@@ -590,6 +664,42 @@ function buildMenuBar(): MenuBar {
         {
           label: t("view.wordWrap"),
           monacoAction: "editor.action.toggleWordWrap",
+        },
+        { sep: true },
+        // Built fresh on each open so `disabled` and `checked` track the
+        // live syntax / mode - the static `items` array would freeze them at
+        // menu-bar build time (language switch) and drift out of sync.
+      ],
+      buildItems: (): MenuItem[] => [
+        {
+          label: t("view.lineNumbers"),
+          monacoAction: "editor.action.toggleLineNumbers",
+        },
+        {
+          label: t("view.renderWhitespace"),
+          run: () => {
+            const ed = getEditor();
+            if (!ed) return;
+            const raw = (ed.getOption as unknown as (id: number) => unknown)(85);
+            ed.updateOptions({
+              renderWhitespace: raw === "all" ? "selection" : "all",
+            });
+          },
+        },
+        {
+          label: t("view.wordWrap"),
+          monacoAction: "editor.action.toggleWordWrap",
+        },
+        { sep: true },
+        {
+          label: t("view.togglePreview"),
+          shortcut: "Ctrl+E",
+          // Only meaningful for markdown buffers; disabled otherwise so the
+          // menu item stays visible (discoverable) but non-interactive.
+          disabled: currentSyntax !== "Markdown",
+          checked: currentSyntax === "Markdown" && viewMode === "preview",
+          run: () =>
+            setViewMode(viewMode === "edit" ? "preview" : "edit"),
         },
         { sep: true },
         { label: t("view.zoomIn"), monacoAction: "editor.action.fontZoomIn", shortcut: "Ctrl++" },

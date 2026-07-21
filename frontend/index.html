@@ -11,7 +11,12 @@
     <div id="app">
       <div id="menubar" class="ce-menubar"></div>
       <div id="toolbar" class="toolbar"></div>
-      <div id="editor" class="editor-host"></div>
+      <div id="editor" class="editor-host">
+        <!-- Monaco mounts as a sibling; preview panel toggles in/out of view -->
+        <div id="preview" class="preview-host" hidden>
+          <div class="preview-body"></div>
+        </div>
+      </div>
       <div id="statusbar" class="statusbar"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
