@@ -447,16 +447,28 @@ function refreshChrome(): void {
 }
 
 function refreshStatusbar(line?: number, column?: number): void {
+  const model = getModel();
   const pos = getEditor()?.getPosition();
+  const cursorLine = line ?? pos?.lineNumber ?? 1;
+  const cursorColumn = column ?? pos?.column ?? 1;
+  const value = model?.getValue() ?? "";
+  const cursorOffset = model
+    ? model.getOffsetAt({ lineNumber: cursorLine, column: cursorColumn })
+    : 0;
+
   updateStatusbar({
     path: currentPath,
     dirty,
-    line: line ?? pos?.lineNumber ?? 1,
-    column: column ?? pos?.column ?? 1,
+    line: cursorLine,
+    column: cursorColumn,
     syntax: currentSyntax,
     encoding: currentEncoding,
     lineEnding: currentLineEnding,
     saveState,
+    lineCount: model?.getLineCount() ?? 1,
+    characterCount: model?.getValueLength() ?? 0,
+    cursorOffset,
+    byteSize: new TextEncoder().encode(contentForDisk(value)).byteLength,
   });
 }
 

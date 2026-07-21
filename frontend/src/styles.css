@@ -298,6 +298,15 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
+.statusbar .sb-stat,
+.statusbar .sb-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+.statusbar .sb-stat {
+  color: var(--ce-fg);
+}
+
 .statusbar .sb-path {
   display: flex;
   align-items: center;
@@ -367,7 +376,27 @@ textarea:focus-visible,
 }
 
 .statusbar .sb-meta {
-  font-variant-numeric: tabular-nums;
+  color: var(--ce-fg);
+}
+
+.statusbar .sb-size {
+  margin-left: 4px;
+}
+
+.statusbar .sb-select-like {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.statusbar .sb-select-like::after {
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  content: "";
+  opacity: 0.72;
+  transform: rotate(45deg) translateY(-1px);
 }
 
 @keyframes ce-spin {
