@@ -69,7 +69,7 @@ interface GrammarMapping {
  * bundle has no highlights query at the time of writing. Markdown uses the
  * regex engine (see highlight-regex.ts), so it isn't here either.
  */
-const GRAMMARS: GrammarMapping[] = [
+export const GRAMMARS: readonly GrammarMapping[] = [
   { languageId: "javascript", wasmName: "javascript", queryFolder: "JavaScript" },
   { languageId: "typescript", wasmName: "typescript", queryFolder: "TypeScript" },
   { languageId: "python", wasmName: "python", queryFolder: "Python" },

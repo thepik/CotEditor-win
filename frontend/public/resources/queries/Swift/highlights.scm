@@ -141,9 +141,10 @@
   (prefix_expression (simple_identifier) @commands)
 )
 
-; #macro(...)
-(macro_invocation
-  "#" @commands
+; This grammar supports macro declarations, but not freestanding #macro calls.
+; Do not label arbitrary ERROR nodes as commands to imitate newer syntax.
+(macro_declaration
+  "macro" @keywords
   (simple_identifier) @commands)
 
 
@@ -181,7 +182,7 @@
 [
   (diagnostic)
   (availability_condition)
-  (playground_literal)
+  ; Playground literals have no structured node in this grammar.
   (key_path_string_expression)
   (selector_expression)
   (external_macro_definition)

@@ -1,0 +1,182 @@
+/*
+ * Document tab strip (phase C).
+ *
+ * Every selector is scoped under the `ce-tabs-` prefix so this file never
+ * changes the editor, toolbar, statusbar or any other global chrome. Colors
+ * come from the existing `--ce-*` theme variables, with light-mode fallbacks
+ * for the standalone component regression page (which has no styles.css).
+ */
+
+.ce-tabs {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 36px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--ce-toolbar-bg, #f7f8fa);
+  border-bottom: 1px solid var(--ce-border, #d9dde3);
+  color: var(--ce-fg, #202124);
+  font-size: 12px;
+  user-select: none;
+}
+
+.ce-tabs[hidden] {
+  display: none;
+}
+
+.ce-tabs-scroller {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ce-border-strong, #c7ccd4) transparent;
+}
+
+.ce-tabs-scroller::-webkit-scrollbar {
+  height: 6px;
+}
+
+.ce-tabs-scroller::-webkit-scrollbar-thumb {
+  background: var(--ce-border-strong, #c7ccd4);
+  border-radius: 3px;
+}
+
+.ce-tabs-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ce-tabs-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 96px;
+  max-width: 220px;
+  height: auto;
+  box-sizing: border-box;
+  padding: 0 6px 0 10px;
+  border-right: 1px solid var(--ce-border, #d9dde3);
+  background: transparent;
+  color: var(--ce-muted, #666b73);
+  cursor: default;
+  outline: none;
+}
+
+.ce-tabs-tab:hover {
+  background: var(--ce-hover, #e9ebef);
+  color: var(--ce-fg, #202124);
+}
+
+.ce-tabs-tab:focus-visible {
+  outline: 2px solid var(--ce-accent, #0f6cbd);
+  outline-offset: -2px;
+}
+
+.ce-tabs-tab--active {
+  background: var(--ce-surface, #ffffff);
+  color: var(--ce-fg, #202124);
+  box-shadow: inset 0 2px 0 var(--ce-accent, #0f6cbd);
+}
+
+.ce-tabs-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ce-tabs-dirty {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ce-warning, #9d5d00);
+  visibility: hidden;
+}
+
+.ce-tabs-tab[data-dirty="true"] .ce-tabs-dirty {
+  visibility: visible;
+}
+
+.ce-tabs-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ce-subtle, #8a9099);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.ce-tabs-tab:hover .ce-tabs-close,
+.ce-tabs-tab--active .ce-tabs-close {
+  opacity: 0.8;
+}
+
+.ce-tabs-close:hover {
+  background: var(--ce-active, #dde1e7);
+  color: var(--ce-fg, #202124);
+  opacity: 1;
+}
+
+.ce-tabs-close:focus-visible {
+  outline: 2px solid var(--ce-accent, #0f6cbd);
+  outline-offset: -1px;
+}
+
+.ce-tabs-tab--dragging {
+  opacity: 0.55;
+}
+
+.ce-tabs--dragging {
+  cursor: grabbing;
+}
+
+.ce-tabs-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--ce-border, #d9dde3);
+  background: transparent;
+  color: var(--ce-muted, #666b73);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ce-tabs-new[hidden] {
+  display: none;
+}
+
+.ce-tabs-new:hover {
+  background: var(--ce-hover, #e9ebef);
+  color: var(--ce-fg, #202124);
+}
+
+.ce-tabs-new:focus-visible {
+  outline: 2px solid var(--ce-accent, #0f6cbd);
+  outline-offset: -2px;
+}

@@ -1,262 +1,179 @@
 /**
- * Line-level text operations (PLAN §阶段4, §十).
- *
- * Ported from CotEditor's `Packages/EditorCore/Sources/TextEditing/String+LineProcessing.swift`.
- * These operate on plain strings and are exposed as Monaco commands so they
- * can be bound to menu items / shortcuts.
- *
- * All functions take a string and return a transformed string; the command
- * wrappers in `ui/` apply them to the current selection (or the whole document
- * when nothing is selected) and push the edit onto Monaco's undo stack.
+ * Pure line-level text operations. Uniform LF/CRLF/CR endings and the terminal
+ * newline are retained. Monaco commands apply these to whole-line ranges.
  */
 
-/** Split `text` into lines, preserving the trailing newline's presence. */
-export function splitLines(text: string): { lines: string[]; trailingNewline: boolean } {
-  if (text === "") return { lines: [], trailingNewline: false };
+/** Split content lines, keeping the terminal newline separate from content. */
+export function splitLines(text: string): { lines: string[]; trailingNewline: boolean; eol: string } {
+  const eol = text.match(/\r\n|\r|\n/)?.[0] ?? "\n";
+  if (text === "") return { lines: [], trailingNewline: false, eol };
   const trailingNewline = text.endsWith("\n") || text.endsWith("\r");
   const lines = text.split(/\r\n|\r|\n/);
-  // split() produces a trailing "" after a final newline; drop it.
-  if (lines.length > 0 && lines[lines.length - 1] === "" && trailingNewline) {
-    lines.pop();
-  }
-  return { lines, trailingNewline };
+  if (trailingNewline) lines.pop();
+  return { lines, trailingNewline, eol };
 }
 
-export function joinLines(lines: string[], trailingNewline: boolean): string {
-  return lines.join("\n") + (trailingNewline ? "\n" : "");
+export function joinLines(lines: string[], trailingNewline: boolean, eol = "\n"): string {
+  return lines.length === 0 ? "" : lines.join(eol) + (trailingNewline ? eol : "");
 }
 
-/** Sort lines ascending (case-sensitive, locale-unaware - byte order). */
-export function sortLines(text: string, ascending: boolean = true): string {
-  const { lines, trailingNewline } = splitLines(text);
+/** Sort lines ascending (case-sensitive, locale-unaware). */
+export function sortLines(text: string, ascending = true): string {
+  const { lines, trailingNewline, eol } = splitLines(text);
   lines.sort();
   if (!ascending) lines.reverse();
-  return joinLines(lines, trailingNewline);
+  return joinLines(lines, trailingNewline, eol);
 }
 
-/** Reverse the order of lines. */
 export function reverseLines(text: string): string {
-  const { lines, trailingNewline } = splitLines(text);
-  lines.reverse();
-  return joinLines(lines, trailingNewline);
+  const { lines, trailingNewline, eol } = splitLines(text);
+  return joinLines(lines.reverse(), trailingNewline, eol);
 }
 
 /** Remove duplicate lines, preserving first occurrence order. */
 export function removeDuplicateLines(text: string): string {
-  const { lines, trailingNewline } = splitLines(text);
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const l of lines) {
-    if (!seen.has(l)) {
-      seen.add(l);
-      out.push(l);
-    }
-  }
-  return joinLines(out, trailingNewline);
+  const { lines, trailingNewline, eol } = splitLines(text);
+  return joinLines([...new Set(lines)], trailingNewline, eol);
 }
 
-/** Remove lines that are empty or whitespace-only. */
 export function removeEmptyLines(text: string): string {
-  const { lines, trailingNewline } = splitLines(text);
-  return joinLines(
-    lines.filter((l) => l.trim() !== ""),
-    trailingNewline,
-  );
+  const { lines, trailingNewline, eol } = splitLines(text);
+  return joinLines(lines.filter((line) => line.trim() !== ""), trailingNewline, eol);
 }
 
-/** Remove trailing whitespace from every line. */
 export function trimTrailingWhitespace(text: string): string {
-  const { lines, trailingNewline } = splitLines(text);
-  return joinLines(
-    lines.map((l) => l.replace(/\s+$/, "")),
-    trailingNewline,
-  );
+  const { lines, trailingNewline, eol } = splitLines(text);
+  return joinLines(lines.map((line) => line.replace(/\s+$/, "")), trailingNewline, eol);
 }
 
-/** Remove leading whitespace common to all selected lines (left-dedent). */
+/** Remove the minimum leading indentation without slicing non-whitespace. */
 export function dedentLines(text: string): string {
-  const { lines, trailingNewline } = splitLines(text);
-  if (lines.length === 0) return text;
-  const minIndent = lines
-    .filter((l) => l.trim() !== "")
-    .reduce((min, l) => {
-      const indent = l.match(/^[ \t]*/)?.[0] ?? "";
-      return indent.length < min.length ? indent : min;
-    }, lines.find((l) => l.trim() !== "")?.match(/^[ \t]*/)?.[0] ?? "");
-  return joinLines(
-    lines.map((l) => l.slice(minIndent.length)),
-    trailingNewline,
-  );
+  const { lines, trailingNewline, eol } = splitLines(text);
+  const indents = lines.filter((line) => line.trim() !== "")
+    .map((line) => line.match(/^[ \t]*/)?.[0].length ?? 0);
+  const length = indents.reduce((min, indent) => Math.min(min, indent), indents[0] ?? 0);
+  return joinLines(lines.map((line) => line.replace(/^[ \t]*/, (indent) => indent.slice(length))), trailingNewline, eol);
 }
 
-/** Indent every line by one tab (or `unit` if supplied). */
-export function indentLines(text: string, unit: string = "\t"): string {
-  const { lines, trailingNewline } = splitLines(text);
-  return joinLines(lines.map((l) => unit + l), trailingNewline);
+/** Indent content lines, including a completely empty buffer. */
+export function indentLines(text: string, unit = "\t"): string {
+  const { lines, trailingNewline, eol } = splitLines(text);
+  return joinLines((text === "" ? [""] : lines).map((line) => unit + line), trailingNewline, eol);
 }
 
-/** Outdent every line by one tab/space level (best effort). */
-export function outdentLines(text: string, unit: string = "\t"): string {
-  const { lines, trailingNewline } = splitLines(text);
-  return joinLines(
-    lines.map((l) => (l.startsWith(unit) ? l.slice(unit.length) : l.replace(/^[ \t]/, ""))),
-    trailingNewline,
-  );
+/** Remove up to one visual indentation level (tabs advance to tab stops). */
+export function outdentLines(text: string, unit = "\t", tabSize = unit === "\t" ? 4 : unit.length): string {
+  const { lines, trailingNewline, eol } = splitLines(text);
+  const size = Math.max(1, tabSize);
+  return joinLines(lines.map((line) => {
+    let column = 0;
+    let index = 0;
+    while (index < line.length && column < size && (line[index] === " " || line[index] === "\t")) {
+      column += line[index] === "\t" ? size - column % size : 1;
+      index++;
+    }
+    return line.slice(index);
+  }), trailingNewline, eol);
 }
 
-/**
- * Move the line(s) spanning `range` up by one line.
- *
- * Returns the new text and the shifted selection range, or null when the line
- * is already at the top of the document.
- *
- * Ported from CotEditor's `moveLineUp(in:)`. The MVP operates on a single
- * selection (no multi-range); the surrounding line is swapped with the one
- * above it. Line endings are preserved per-line.
- */
-export function moveLineUp(
-  text: string,
-  startLine: number,
-  endLine: number,
-): { text: string; selStart: number; selEnd: number } | null {
-  if (startLine <= 1) return null;
-  const { lines, trailingNewline } = splitLines(text);
-  // `lines` is 0-indexed; startLine/endLine are 1-based.
-  const s = startLine - 1;
-  const e = endLine - 1;
-  if (e >= lines.length) return null;
-
-  // The block of lines to move.
-  const block = lines.slice(s, e + 1);
-  // The single line above to swap with.
-  const above = lines[s - 1];
-
-  // Swap positions: above moves below the block.
-  const moved = lines.slice(0, s - 1);
-  moved.push(...block, above);
-  moved.push(...lines.slice(e + 1));
-
-  const newText = joinLines(moved, trailingNewline);
-
-  // Selection shifts up by the length of the above line + its newline.
-  // Compute absolute offsets in the new text.
-  const selStart = offsetOfLine(moved, s - 1);
-  const selEnd = offsetOfLine(moved, e) + block[block.length - 1].length;
-  return { text: newText, selStart, selEnd };
+interface LineResult {
+  text: string;
+  selStart: number;
+  selEnd: number;
 }
 
-/**
- * Move the line(s) spanning `range` down by one line.
- *
- * Returns the new text and the shifted selection range, or null when the line
- * is already at the bottom of the document.
- */
-export function moveLineDown(
-  text: string,
-  startLine: number,
-  endLine: number,
-): { text: string; selStart: number; selEnd: number } | null {
-  const { lines, trailingNewline } = splitLines(text);
-  const s = startLine - 1;
-  const e = endLine - 1;
-  if (e >= lines.length - 1) return null;
-
-  const block = lines.slice(s, e + 1);
-  const below = lines[e + 1];
-
-  const moved = lines.slice(0, s);
-  moved.push(below, ...block);
-  moved.push(...lines.slice(e + 2));
-
-  const newText = joinLines(moved, trailingNewline);
-  const selStart = offsetOfLine(moved, s + 1);
-  const selEnd = offsetOfLine(moved, e + 1) + block[block.length - 1].length;
-  return { text: newText, selStart, selEnd };
+function validRange(lines: string[], startLine: number, endLine: number): boolean {
+  return Number.isInteger(startLine) && Number.isInteger(endLine) &&
+    startLine >= 1 && endLine >= startLine && endLine <= lines.length;
 }
 
-/** Return the character offset where `lineIndex` (0-based) begins in `lines`. */
-function offsetOfLine(lines: string[], lineIndex: number): number {
-  if (lineIndex <= 0) return 0;
+/** Offset of a zero-based content line, measured in UTF-16 including the EOL. */
+function offsetOfLine(lines: string[], lineIndex: number, eol: string): number {
   let offset = 0;
-  for (let i = 0; i < lineIndex && i < lines.length; i++) {
-    offset += lines[i].length + 1; // +1 for the newline
+  for (let index = 0; index < lineIndex && index < lines.length; index++) {
+    offset += lines[index].length + eol.length;
   }
   return offset;
 }
 
-/** Shuffle the lines of `text` randomly. */
+/** Move a whole 1-based line block up; the terminal EOL stays at EOF. */
+export function moveLineUp(text: string, startLine: number, endLine: number): LineResult | null {
+  const { lines, trailingNewline, eol } = splitLines(text);
+  if (!validRange(lines, startLine, endLine) || startLine === 1) return null;
+  const start = startLine - 1;
+  const block = lines.slice(start, endLine);
+  const moved = lines.slice(0, start - 1).concat(block, [lines[start - 1]], lines.slice(endLine));
+  const selStart = offsetOfLine(moved, start - 1, eol);
+  return {
+    text: joinLines(moved, trailingNewline, eol),
+    selStart,
+    selEnd: selStart + block.join(eol).length,
+  };
+}
+
+export function moveLineDown(text: string, startLine: number, endLine: number): LineResult | null {
+  const { lines, trailingNewline, eol } = splitLines(text);
+  if (!validRange(lines, startLine, endLine) || endLine === lines.length) return null;
+  const start = startLine - 1;
+  const block = lines.slice(start, endLine);
+  const moved = lines.slice(0, start).concat([lines[endLine]], block, lines.slice(endLine + 1));
+  const selStart = offsetOfLine(moved, start + 1, eol);
+  return {
+    text: joinLines(moved, trailingNewline, eol),
+    selStart,
+    selEnd: selStart + block.join(eol).length,
+  };
+}
+
+/** Shuffle using Fisher-Yates. */
 export function shuffleLines(text: string): string {
-  const { lines, trailingNewline } = splitLines(text);
-  // Fisher-Yates shuffle.
-  for (let i = lines.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [lines[i], lines[j]] = [lines[j], lines[i]];
+  const { lines, trailingNewline, eol } = splitLines(text);
+  for (let index = lines.length - 1; index > 0; index--) {
+    const other = Math.floor(Math.random() * (index + 1));
+    [lines[index], lines[other]] = [lines[other], lines[index]];
   }
-  return joinLines(lines, trailingNewline);
+  return joinLines(lines, trailingNewline, eol);
 }
 
-/** Duplicate the line(s) spanning the given 1-based line range, inserting below. */
-export function duplicateLines(
-  text: string,
-  startLine: number,
-  endLine: number,
-): { text: string; selStart: number; selEnd: number } | null {
-  const { lines, trailingNewline } = splitLines(text);
-  const s = startLine - 1;
-  const e = endLine - 1;
-  if (s < 0 || e >= lines.length) return null;
-
-  const block = lines.slice(s, e + 1);
-  const inserted = lines.slice(0, e + 1).concat(block, lines.slice(e + 1));
-  const newText = joinLines(inserted, trailingNewline);
-
-  // Selection lands on the duplicated block.
-  const selStart = offsetOfLine(inserted, e + 1);
-  const selEnd = selStart + block.join("\n").length + (block.length > 1 ? block.length - 1 : 0);
-  return { text: newText, selStart, selEnd };
+/** Duplicate a 1-based content block below itself. */
+export function duplicateLines(text: string, startLine: number, endLine: number): LineResult | null {
+  const { lines, trailingNewline, eol } = splitLines(text);
+  if (text === "") lines.push("");
+  if (!validRange(lines, startLine, endLine)) return null;
+  const block = lines.slice(startLine - 1, endLine);
+  const inserted = lines.slice(0, endLine).concat(block, lines.slice(endLine));
+  const selStart = offsetOfLine(inserted, endLine, eol);
+  return {
+    text: joinLines(inserted, trailingNewline, eol),
+    selStart,
+    // block.join already includes all inter-line delimiters exactly once.
+    selEnd: selStart + block.join(eol).length,
+  };
 }
 
-/** Delete the line(s) spanning the given 1-based line range. Returns null if out of range. */
-export function deleteLines(
-  text: string,
-  startLine: number,
-  endLine: number,
-): { text: string; selStart: number; selEnd: number } | null {
-  const { lines, trailingNewline } = splitLines(text);
-  const s = startLine - 1;
-  const e = endLine - 1;
-  if (s < 0 || e >= lines.length) return null;
-
-  const kept = lines.slice(0, s).concat(lines.slice(e + 1));
-  const newText = joinLines(kept, trailingNewline);
-
-  // Cursor lands at the start of where the deleted block was (now the next line, or end).
-  const newLines = splitLines(newText).lines;
-  const selLine = Math.min(s, newLines.length === 0 ? 0 : newLines.length - 1);
-  const selStart = offsetOfLine(newLines, selLine);
-  return { text: newText, selStart, selEnd: selStart };
+export function deleteLines(text: string, startLine: number, endLine: number): LineResult | null {
+  const { lines, trailingNewline, eol } = splitLines(text);
+  if (!validRange(lines, startLine, endLine)) return null;
+  const kept = lines.slice(0, startLine - 1).concat(lines.slice(endLine));
+  const selStart = offsetOfLine(kept, Math.max(0, Math.min(startLine - 1, kept.length - 1)), eol);
+  return { text: joinLines(kept, trailingNewline, eol), selStart, selEnd: selStart };
 }
 
-/**
- * Join the lines within the given 1-based line range, collapsing inter-line
- * whitespace to a single space.
- */
-export function joinLinesRange(
-  text: string,
-  startLine: number,
-  endLine: number,
-): { text: string; selStart: number; selEnd: number } | null {
-  const { lines, trailingNewline } = splitLines(text);
-  const s = startLine - 1;
-  const e = endLine - 1;
-  if (s < 0 || e >= lines.length || e <= s) return null;
-
-  const block = lines.slice(s, e + 1);
-  const joined = block.join(" ");
-  const replaced = lines.slice(0, s).concat([joined], lines.slice(e + 1));
-  const newText = joinLines(replaced, trailingNewline);
-
-  const selStart = offsetOfLine(replaced, s);
-  const selEnd = selStart + joined.length;
-  return { text: newText, selStart, selEnd };
+/** Join inter-line whitespace to one space, retaining outer whitespace. */
+export function joinLinesRange(text: string, startLine: number, endLine: number): LineResult | null {
+  const { lines, trailingNewline, eol } = splitLines(text);
+  if (!validRange(lines, startLine, endLine) || endLine === startLine) return null;
+  const block = lines.slice(startLine - 1, endLine);
+  const joined = block.map((line, index) => {
+    if (index > 0) line = line.trimStart();
+    if (index < block.length - 1) line = line.trimEnd();
+    return line;
+  }).join(" ");
+  const replaced = lines.slice(0, startLine - 1).concat([joined], lines.slice(endLine));
+  const selStart = offsetOfLine(replaced, startLine - 1, eol);
+  return {
+    text: joinLines(replaced, trailingNewline, eol),
+    selStart,
+    selEnd: selStart + joined.length,
+  };
 }

@@ -1,6 +1,6 @@
 /**
- * Top toolbar: New / Open / Save / Save As buttons, an optional Edit/Preview
- * mode toggle, and a language switcher (`<select>`) on the right edge,
+ * Top toolbar: New / Open / Save / Save As buttons, an optional Edit/Split/
+ * Preview mode toggle, and a language switcher (`<select>`) on the right edge,
  * mirroring the original CotEditor's top-right syntax picker.
  *
  * Built with plain DOM (no framework, per PLAN §二). `wireToolbar` renders the
@@ -19,7 +19,7 @@
 import { t, onLangChange } from "../lib/i18n";
 import { SUPPORTED_SYNTAXES } from "../editor/language-config";
 
-export type ViewMode = "edit" | "preview";
+export type ViewMode = "edit" | "preview" | "split";
 
 export interface ToolbarActions {
   onNew: () => void | Promise<void>;
@@ -46,6 +46,8 @@ export function renderToolbar(): void {
   const host = document.getElementById("toolbar");
   if (!host || !actions) return;
   host.innerHTML = "";
+  host.setAttribute("role", "toolbar");
+  host.setAttribute("aria-label", t("a11y.toolbar"));
 
   const buttons: Array<{
     command: string;
@@ -77,9 +79,10 @@ export function renderToolbar(): void {
   spacer.className = "spacer";
   host.appendChild(spacer);
 
-  // Edit/Preview segmented toggle. Only shown when the current buffer is
-  // Markdown (per `isPreviewAvailable`); hidden otherwise to keep the toolbar
-  // clean for non-markdown files. The active segment mirrors `currentMode`.
+  // Edit / Split / Preview segmented toggle. Only shown when the current
+  // buffer is Markdown (per `isPreviewAvailable`); hidden otherwise to keep the
+  // toolbar clean for non-markdown files. The active segment mirrors
+  // `currentMode`.
   if (actions.isPreviewAvailable()) {
     const modeWrap = document.createElement("div");
     modeWrap.className = "toolbar-mode";
@@ -87,13 +90,19 @@ export function renderToolbar(): void {
     modeWrap.setAttribute("aria-label", t("view.togglePreview"));
 
     const current = actions.currentMode();
-    for (const mode of ["edit", "preview"] as const) {
+    const modes = [
+      { mode: "edit", label: t("toolbar.edit") },
+      { mode: "split", label: t("toolbar.split") },
+      { mode: "preview", label: t("toolbar.preview") },
+    ] as const;
+    for (const { mode, label } of modes) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "toolbar-mode-btn";
       btn.dataset.mode = mode;
-      btn.textContent = mode === "edit" ? t("toolbar.edit") : t("toolbar.preview");
-      btn.title = mode === "edit" ? t("toolbar.edit") : t("toolbar.preview");
+      btn.textContent = label;
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
       btn.setAttribute("aria-pressed", String(current === mode));
       if (current === mode) btn.dataset.active = "true";
       btn.addEventListener("click", () => actions!.onModeChange(mode));

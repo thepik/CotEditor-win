@@ -87,6 +87,12 @@ textarea:focus-visible,
   height: 100vh;
 }
 
+/* Tabs sit between the toolbar and the editor; the strip owns its own height. */
+#tabs {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 /* --- menu bar ------------------------------------------------------------- */
 
 .ce-menubar {
@@ -122,7 +128,7 @@ textarea:focus-visible,
   z-index: 1100;
   min-width: 220px;
   padding: 5px;
-  overflow: hidden;
+  overflow: visible;
   background: var(--ce-surface-raised);
   color: var(--ce-fg);
   border: 1px solid var(--ce-border);
@@ -184,6 +190,40 @@ textarea:focus-visible,
   display: inline-block;
   width: 15px;
   margin-right: 3px;
+}
+
+.ce-menu-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ce-accent) 72%, transparent);
+  outline-offset: -1px;
+}
+
+/* Nested flyout ("Open with Encoding…"). The parent row is the containing
+   block so the flyout aligns with the row instead of the menu top; the pointer
+   path from the row into the flyout never crosses sibling items. */
+.ce-menu-dropdown button[data-submenu="true"] {
+  position: relative;
+}
+
+.ce-menu-dropdown .ce-submenu {
+  top: -6px;
+  left: 100%;
+}
+
+.ce-menu-dropdown .ce-submenu.align-right {
+  right: 100%;
+  left: auto;
+}
+
+.ce-menu-dropdown .ce-menu-arrow {
+  margin-left: 22px;
+  color: var(--ce-subtle);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.ce-menu-dropdown button:hover .ce-menu-arrow,
+.ce-menu-dropdown button:focus-visible .ce-menu-arrow {
+  color: inherit;
 }
 
 /* --- toolbar -------------------------------------------------------------- */
@@ -467,17 +507,153 @@ textarea:focus-visible,
   font-style: italic;
 }
 
-/* --- editor --------------------------------------------------------------- */
+/* --- editor + outline workspace ------------------------------------------- */
+
+/* The outline sits beside the editor, so both live in a horizontal workspace
+   that owns the remaining height below the tabs. */
+.workspace {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.outline-host {
+  flex: 0 0 var(--ce-outline-width, 240px);
+  width: var(--ce-outline-width, 240px);
+  min-width: 150px;
+  border-left: 1px solid var(--ce-border);
+}
+
+.outline-host[hidden] {
+  display: none;
+}
 
 .editor-host {
   position: relative;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
 }
 
 .editor-host .monaco-editor,
 .editor-host .monaco-editor .overflow-guard {
   border-radius: 0;
+}
+
+/* --- find results overlay ------------------------------------------------- */
+/* The list floats over the editor's bottom-right corner and never takes part
+   in the workspace flex layout, so split preview and the outline keep their
+   geometry. */
+
+.find-results-host {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 35;
+  width: min(460px, calc(100% - 24px));
+  max-width: calc(100% - 24px);
+  pointer-events: none;
+}
+
+.find-results-host > .ce-find-results {
+  max-width: 100%;
+  max-height: min(60vh, calc(100vh - 150px));
+  pointer-events: auto;
+}
+
+.find-results-host > .ce-find-results[hidden] {
+  display: none;
+}
+
+@media (max-width: 520px) {
+  .find-results-host {
+    right: 6px;
+    bottom: 6px;
+    width: calc(100% - 12px);
+    max-width: calc(100% - 12px);
+  }
+}
+
+/* --- native file drop affordance ------------------------------------------ */
+/* Only shown while an OS file drag is active. pointer-events: none keeps the
+   overlay from interfering with ordinary drags/drops. */
+
+#app.ce-file-drop-target::after {
+  position: fixed;
+  inset: 4px;
+  z-index: 1400;
+  border: 2px dashed var(--ce-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ce-accent) 6%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.sb-sr,
+.ce-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+/* --- split preview -------------------------------------------------------- */
+/* The editor keeps its Monaco layout state while sharing the host with the
+   preview. Monaco's automaticLayout observes the resized .monaco-editor box. */
+
+.editor-host[data-ce-preview-mode="split"] {
+  display: flex;
+  flex-direction: row;
+}
+
+.editor-host[data-ce-preview-mode="split"] > .monaco-editor {
+  order: 1;
+  flex: 1 1 55%;
+  width: auto !important;
+  height: 100% !important;
+  min-width: 0;
+}
+
+.editor-host[data-ce-preview-mode="split"] > .preview-host {
+  order: 2;
+  position: relative;
+  inset: auto;
+  flex: 1 1 45%;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--ce-border);
+  padding: 20px 18px 48px;
+}
+
+/* Narrow windows stack the two panes instead of crushing both. */
+@media (max-width: 860px) {
+  .outline-host {
+    max-width: 45vw;
+  }
+
+  .editor-host[data-ce-preview-mode="split"] {
+    flex-direction: column;
+  }
+
+  .editor-host[data-ce-preview-mode="split"] > .monaco-editor {
+    flex: 1 1 50%;
+    width: 100% !important;
+    height: 50% !important;
+    min-height: 0;
+  }
+
+  .editor-host[data-ce-preview-mode="split"] > .preview-host {
+    flex: 1 1 50%;
+    border-left: 0;
+    border-top: 1px solid var(--ce-border);
+  }
 }
 
 /* --- status bar ----------------------------------------------------------- */
@@ -583,6 +759,17 @@ textarea:focus-visible,
 
 .statusbar .sb-size {
   margin-left: 4px;
+}
+
+.statusbar .sb-encoding {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+}
+
+.statusbar .sb-encoding .ce-encoding-trigger {
+  margin: 0 -6px;
+  color: var(--ce-fg);
 }
 
 .statusbar .sb-select-like {

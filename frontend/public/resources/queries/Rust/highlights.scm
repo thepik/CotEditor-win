@@ -29,7 +29,7 @@
   "extern"
   "fn"
   "for"
-  "gen"
+  ; gen blocks require a newer grammar; gen remains a legal identifier here.
   "if"
   "impl"
   "in"
@@ -40,7 +40,7 @@
   "mod"
   "move"
   "pub"
-  "raw"
+  ; &raw is not supported by this grammar; raw is still an identifier.
   "ref"
   "return"
   "static"

@@ -121,12 +121,12 @@
 ; ----------------------------
 
 (parameter name: (identifier) @variables)
-(variable_declarator name: (identifier) @variables)
+(variable_declarator (identifier) @variables)
 (declaration_expression name: (identifier) @variables)
 (declaration_pattern name: (identifier) @variables)
 (catch_declaration name: (identifier) @variables)
-(from_clause name: (identifier) @variables)
-(foreach_statement left: (identifier) @variables)
+(from_clause (identifier) @variables)
+(for_each_statement left: (identifier) @variables)
 
 
 ; MARK: Values
@@ -158,7 +158,7 @@
 [
   (character_literal)
   (string_literal)
-  (raw_string_literal)
+  ; C# 11 raw strings are not supported by this grammar (ordinary strings are).
   (verbatim_string_literal)
   (interpolated_string_expression)
 ] @strings

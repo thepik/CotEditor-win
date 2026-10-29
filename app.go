@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,10 @@ type App struct {
 	documentPath  string
 	documentDirty bool
 	language      string
+	// sessionDirty is true while any open document has unsaved changes. The
+	// frontend owns the save/discard decision; beforeClose only asks it to run
+	// that flow through the "app:request-close" event and keeps the window open.
+	sessionDirty bool
 
 	// startupFile is the file path passed on the command line when the app is
 	// launched (e.g. double-clicking a .md file in Explorer). Empty when no
@@ -74,6 +79,9 @@ type FileContent struct {
 	Encoding string `json:"encoding"`
 	// Line ending detected in the file: "lf", "crlf" or "cr".
 	LineEnding string `json:"line_ending"`
+	// MixedLineEnding is true when more than one line-ending style occurs.
+	// Content keeps the original bytes; this is a warning hint only.
+	MixedLineEnding bool `json:"mixed_line_ending"`
 }
 
 // StartupFile returns the file path requested on the command line when the app
@@ -97,6 +105,15 @@ func (a *App) OpenPath(path string) (FileContent, error) {
 	return readFileAt(path)
 }
 
+// OpenPathWithEncoding re-interprets the bytes at path using encoding instead
+// of auto-detection. The file itself is never modified.
+func (a *App) OpenPathWithEncoding(path, encoding string) (FileContent, error) {
+	if path == "" {
+		return FileContent{}, os.ErrInvalid
+	}
+	return readFileAtWithEncoding(path, encoding)
+}
+
 // handleSecondInstance is invoked by Wails' SingleInstanceLock when another
 // process is started while this instance is already running. The second
 // instance's command-line args are forwarded here; we extract the first file
@@ -112,17 +129,21 @@ func (a *App) handleSecondInstance(args []string) {
 	runtime.EventsEmit(a.ctx, "app:open-path", path)
 }
 
-// OpenFile prompts the user with a native open dialog and returns the selected
-// file's contents. Returns an error if the user cancels or the read fails.
-func (a *App) OpenFile() (FileContent, error) {
+func (a *App) promptOpenFile() (string, error) {
 	// We don't restrict extensions because CotEditor opens arbitrary text files.
-	selection, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Open File",
 		Filters: []runtime.FileFilter{
 			{DisplayName: "Text Files (*.txt, *.md, *.json, *.ts, *.js, *.py)", Pattern: "*.txt;*.md;*.json;*.ts;*.js;*.py"},
 			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
 		},
 	})
+}
+
+// OpenFile prompts the user with a native open dialog and returns the selected
+// file's contents. Returns an error if the user cancels or the read fails.
+func (a *App) OpenFile() (FileContent, error) {
+	selection, err := a.promptOpenFile()
 	if err != nil {
 		return FileContent{}, err
 	}
@@ -134,22 +155,33 @@ func (a *App) OpenFile() (FileContent, error) {
 	return readFileAt(selection)
 }
 
+// OpenFileWithEncoding prompts for a file and decodes it with the requested
+// encoding instead of auto-detection.
+func (a *App) OpenFileWithEncoding(encoding string) (FileContent, error) {
+	selection, err := a.promptOpenFile()
+	if err != nil {
+		return FileContent{}, err
+	}
+	if selection == "" {
+		return FileContent{Path: nil}, nil
+	}
+	return readFileAtWithEncoding(selection, encoding)
+}
+
 // SaveFile writes content to path. If path is empty (untitled buffer), it
 // falls back to SaveAs behaviour. Returns the path actually written to.
 func (a *App) SaveFile(path string, content string) (string, error) {
 	if path == "" {
 		return a.SaveAs(content)
 	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := safeWriteFile(path, []byte(content)); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
-// SaveAs prompts for a destination path via a save dialog, then writes content.
-// Returns the chosen path, or "" if the user cancelled.
-func (a *App) SaveAs(content string) (string, error) {
-	selection, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+func (a *App) promptSaveFile() (string, error) {
+	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:           "Save File As",
 		DefaultFilename: "Untitled.txt",
 		Filters: []runtime.FileFilter{
@@ -157,16 +189,86 @@ func (a *App) SaveAs(content string) (string, error) {
 			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
 		},
 	})
+}
+
+// SaveAs prompts for a destination path via a save dialog, then writes content.
+// Returns the chosen path, or "" if the user cancelled.
+func (a *App) SaveAs(content string) (string, error) {
+	selection, err := a.promptSaveFile()
 	if err != nil {
 		return "", err
 	}
 	if selection == "" {
 		return "", nil // cancelled
 	}
-	if err := os.WriteFile(selection, []byte(content), 0644); err != nil {
+	if err := safeWriteFile(selection, []byte(content)); err != nil {
 		return "", err
 	}
 	return selection, nil
+}
+
+// SaveFileWithEncoding writes content encoded as requested. BOMs are added
+// according to the encoding; an empty path falls back to SaveAsWithEncoding.
+func (a *App) SaveFileWithEncoding(path, content, encoding string) (string, error) {
+	if path == "" {
+		return a.SaveAsWithEncoding(content, encoding)
+	}
+	if err := saveTextFile(path, content, encoding); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// SaveAsWithEncoding prompts for a destination and writes content encoded as
+// requested. Returns "" when the user cancels.
+func (a *App) SaveAsWithEncoding(content, encoding string) (string, error) {
+	selection, err := a.promptSaveFile()
+	if err != nil {
+		return "", err
+	}
+	if selection == "" {
+		return "", nil
+	}
+	if err := saveTextFile(selection, content, encoding); err != nil {
+		return "", err
+	}
+	return selection, nil
+}
+
+// SaveFileChecked writes content only if the on-disk stamp still matches the
+// baseline captured before editing. A mismatch returns FILE_CONFLICT and does
+// not overwrite the externally changed file. Negative expected values skip the
+// individual check; (0, 0) means the file was expected to be absent.
+func (a *App) SaveFileChecked(path, content, encoding string, expectedSize int64, expectedModTime int64) (string, error) {
+	if path == "" {
+		return a.SaveAsChecked(content, encoding, expectedSize, expectedModTime)
+	}
+	if err := saveTextFileChecked(path, content, encoding, expectedSize, expectedModTime); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// SaveAsChecked prompts for a destination and performs the same stamp-checked
+// write as SaveFileChecked.
+func (a *App) SaveAsChecked(content, encoding string, expectedSize, expectedModTime int64) (string, error) {
+	selection, err := a.promptSaveFile()
+	if err != nil {
+		return "", err
+	}
+	if selection == "" {
+		return "", nil
+	}
+	if err := saveTextFileChecked(selection, content, encoding, expectedSize, expectedModTime); err != nil {
+		return "", err
+	}
+	return selection, nil
+}
+
+// FileStamp returns the current size and modification time for external-change
+// detection. A missing file is not an error: Exists is false.
+func (a *App) FileStamp(path string) (FileStamp, error) {
+	return fileStamp(path)
 }
 
 // NewFile returns an empty FileContent so the frontend can reset its state
@@ -183,7 +285,8 @@ func (a *App) NewFile() (FileContent, error) {
 // SetDocumentState mirrors the small piece of editor state needed by the
 // native window-close guard. Existing documents are normally auto-saved by the
 // frontend; keeping the transient dirty state here also protects the short
-// interval while a write is still in flight.
+// interval while a write is still in flight. The language is retained for any
+// future native messaging; close handling itself lives in session.go.
 func (a *App) SetDocumentState(path string, dirty bool, language string) {
 	a.stateMu.Lock()
 	a.documentPath = path
@@ -194,84 +297,52 @@ func (a *App) SetDocumentState(path string, dirty bool, language string) {
 	a.stateMu.Unlock()
 }
 
-// beforeClose asks for confirmation whenever the frontend reports changes
-// that have not reached disk yet. Returning true cancels the close in Wails.
-func (a *App) beforeClose(ctx context.Context) bool {
-	a.stateMu.RLock()
-	path := a.documentPath
-	dirty := a.documentDirty
-	language := a.language
-	a.stateMu.RUnlock()
-
-	if !dirty {
-		return false
-	}
-
-	title := "未保存的更改"
-	message := "未命名文档尚未保存。关闭窗口将丢失编辑内容，确定要关闭吗？"
-	closeLabel := "不保存并关闭"
-	cancelLabel := "取消"
-	if path != "" {
-		message = "最新更改尚未完成写入。现在关闭可能会丢失部分编辑内容，确定要关闭吗？"
-	}
-	if language == "en" {
-		title = "Unsaved Changes"
-		message = "The untitled document has not been saved. Closing now will discard your changes."
-		closeLabel = "Close Without Saving"
-		cancelLabel = "Cancel"
-		if path != "" {
-			message = "The latest changes have not finished saving. Closing now may discard some edits."
-		}
-	}
-
-	selection, err := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
-		Type:          runtime.QuestionDialog,
-		Title:         title,
-		Message:       message,
-		Buttons:       []string{closeLabel, cancelLabel},
-		DefaultButton: cancelLabel,
-		CancelButton:  cancelLabel,
-	})
-	if err != nil {
-		// A failed dialog must never silently discard user content.
-		return true
-	}
-	return selection != closeLabel
+// readFileAt validates text before it can cross the JSON boundary. The
+// returned Content is always BOM-free and valid UTF-8; Encoding records how
+// the bytes were interpreted so a save can put the same encoding back.
+//
+// Read and write paths both allow links and reparse points in parent
+// directories (redirected profiles, OneDrive folders, junctions): reading
+// follows them and saving stages a replacement next to the resolved file.
+// Write-side identity checks stay on the final target, which must be a regular
+// file rather than a symlink, junction or other reparse point.
+// checkReadPath applies the platform path syntax rules and os.Stat resolves
+// the final target; safeWriteFile uses checkWriteTargetPath instead.
+func readFileAt(path string) (FileContent, error) {
+	return readFileAtWithEncoding(path, "")
 }
 
-// readFileAt reads a file, decodes as UTF-8 and detects line endings.
-//
-// MVP targets UTF-8; the Encoding field is threaded through so a future
-// encoding-detection pass (PLAN §阶段5 "编码处理") can populate it without
-// changing the IPC shape.
-func readFileAt(path string) (FileContent, error) {
-	bytes, err := os.ReadFile(path)
+func readFileAtWithEncoding(path, encoding string) (FileContent, error) {
+	if err := checkPlatformPath(path); err != nil {
+		return FileContent{}, err
+	}
+	abs, err := filepath.Abs(path)
 	if err != nil {
 		return FileContent{}, err
 	}
-
-	// Decode as UTF-8. Invalid sequences become the replacement char; we don't
-	// surface had-errors here because MVP is UTF-8 only.
-	content := string(bytes)
-
-	abs, _ := filepath.Abs(path)
-	lineEnding := detectLineEnding(content)
+	if err := checkReadPath(abs); err != nil {
+		return FileContent{}, err
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return FileContent{}, err
+	}
+	var content, detected string
+	if encoding == "" {
+		content, detected, err = decodeAuto(data)
+	} else {
+		content, err = decodeExplicit(data, encoding)
+		detected, _ = canonicalEncoding(encoding)
+	}
+	if err != nil {
+		return FileContent{}, fmt.Errorf("open %q: %w", abs, err)
+	}
+	lineEnding, mixed := analyzeLineEndings(content)
 	return FileContent{
-		Path:       &abs,
-		Content:    content,
-		Encoding:   "UTF-8",
-		LineEnding: lineEnding,
+		Path:            &abs,
+		Content:         content,
+		Encoding:        detected,
+		LineEnding:      lineEnding,
+		MixedLineEnding: mixed,
 	}, nil
-}
-
-// detectLineEnding returns "crlf" if any \r\n present, else "cr" if any lone
-// \r present, else "lf". Matches CotEditor's pragmatic detection.
-func detectLineEnding(text string) string {
-	if strings.Contains(text, "\r\n") {
-		return "crlf"
-	}
-	if strings.Contains(text, "\r") {
-		return "cr"
-	}
-	return "lf"
 }

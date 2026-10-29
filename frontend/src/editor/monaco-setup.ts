@@ -100,8 +100,7 @@ export async function setupMonaco(): Promise<void> {
 
   editor = monaco.editor.create(host, {
     model,
-    theme: "vs",
-    automaticLayout: true,
+    theme: "vs",    automaticLayout: true,
     fontFamily:
       '"Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace',
     fontLigatures: true,
@@ -141,6 +140,12 @@ export async function setupMonaco(): Promise<void> {
     // Enable tree-sitter semantic tokens to override the builtin tokenizer's
     // colours for languages with a registered grammar (highlight-tree-sitter).
     "semanticHighlighting.enabled": true,
+  });
+  // The tabbed shell swaps models on the single editor. Keep the legacy
+  // getModel() accessor pointing at the active document so older modules and
+  // headless regressions observe the same buffer the user is editing.
+  editor.onDidChangeModel(() => {
+    model = editor?.getModel() ?? null;
   });
 }
 

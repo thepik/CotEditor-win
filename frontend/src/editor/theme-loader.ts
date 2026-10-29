@@ -15,6 +15,7 @@
  */
 
 import { defineMonacoTheme, setMonacoTheme } from "./monaco-setup";
+import { WindowSetDarkTheme, WindowSetLightTheme } from "../wailsjs/runtime/runtime";
 import type * as monaco from "monaco-editor";
 
 /** The 15 scope keys a .cottheme may define, mapped to a CSS colour string. */
@@ -34,29 +35,31 @@ interface ThemeMetadata {
 /** A scope entry is either a bare hex string or an object with a colour. */
 type ThemeScopeEntry = string | { color?: string; usesSystemSetting?: boolean };
 
-/** Map of theme file basename (without extension) -> internal name. */
+/** Map of display names (file basenames) to the original parsed themes. */
 const themeRegistry = new Map<string, CotTheme>();
+const STORAGE_KEY = "coteditor.theme.v1";
 let currentTheme: string | null = null;
+let themesLoading: Promise<void> | null = null;
 
 /**
- * Mapping from CotEditor scope names -> Monaco token CSS scope names.
- *
- * tree-sitter captures and regex rule scopes use the CotEditor names (e.g.
- * `@keywords`), so highlight engines emit tokens whose `type` is one of these
- * left-hand names. Monaco then looks up the colour in the theme's `rules`.
+ * Monaco aliases for CotEditor scopes. Never merge commands into keyword or
+ * characters into string: doing so overwrites the primary scope's colour.
+ * Keep original scope rules too, for providers that emit CotEditor names.
+ * Legacy providers still emitting the collapsed keyword/string aliases use
+ * the primary scope; distinguishing their captures belongs in those providers.
  */
 const SCOPE_TO_MONACO_TOKEN: Record<string, string> = {
   text: "",
   background: "",
   keywords: "keyword",
-  commands: "keyword",
+  commands: "keyword.commands",
   types: "type",
   attributes: "attribute",
   variables: "variable",
   values: "literal",
   numbers: "number",
   strings: "string",
-  characters: "string",
+  characters: "string.characters",
   comments: "comment",
   invisibles: "",
   lineHighlight: "",
@@ -114,10 +117,9 @@ const THEME_NAMES = [
  * becomes `anura-dark`. We keep the display name around (in `themeRegistry`
  * and for menus) and only slugify for the Monaco `defineTheme`/`setTheme` calls.
  */
-function monacoThemeId(name: string): string {
+export function monacoThemeId(name: string): string {
   return name
     .toLowerCase()
-    .replace(/\([^)]*\)/g, "") // drop "(Dark)" etc.
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
@@ -135,20 +137,33 @@ function resourceUrl(...segments: string[]): string {
  * `public/resources/themes/` dir and are fetched at runtime; fetching (rather
  * than importing) lets names with spaces / parentheses resolve cleanly.
  */
-export async function loadAllThemes(): Promise<void> {
-  await Promise.all(
-    THEME_NAMES.map(async (name) => {
+export function loadAllThemes(): Promise<void> {
+  if (themesLoading) return themesLoading;
+  if (themeRegistry.size === THEME_NAMES.length) return Promise.resolve();
+  themesLoading = (async () => {
+    const themes = await Promise.all(THEME_NAMES.map(async (name) => {
       try {
         const res = await fetch(resourceUrl("themes", `${name}.cottheme`));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const theme = (await res.json()) as CotTheme;
-        themeRegistry.set(name, theme);
-        defineMonacoTheme(monacoThemeId(name), buildMonacoTheme(theme));
+        return (await res.json()) as CotTheme;
       } catch (err) {
         console.warn(`Failed to load theme ${name}:`, err);
+        return null;
       }
-    }),
-  );
+    }));
+    // Fetch concurrently, but register in source order, not response order.
+    themes.forEach((theme, index) => {
+      if (!theme) return;
+      const name = THEME_NAMES[index];
+      try {
+        defineMonacoTheme(monacoThemeId(name), buildMonacoTheme(theme));
+        themeRegistry.set(name, theme);
+      } catch (err) {
+        console.warn(`Failed to define theme ${name}:`, err);
+      }
+    });
+  })().finally(() => { themesLoading = null; });
+  return themesLoading;
 }
 
 /** Convert a parsed `.cottheme` into Monaco standalone theme data. */
@@ -162,9 +177,14 @@ function buildMonacoTheme(
   const colors: Record<string, string> = {
     "editor.background": bg,
     "editor.foreground": fg,
+    "editorGutter.background": bg,
   };
 
-  // Editor chrome scopes.
+  // Editor chrome scopes, including the original caret and highlight accent.
+  const insertionPoint = scopeColor(theme, "insertionPoint");
+  if (insertionPoint) colors["editorCursor.foreground"] = insertionPoint;
+  const highlight = scopeColor(theme, "highlight");
+  if (highlight) colors["editor.findMatchBorder"] = highlight;
   const lineHighlight = scopeColor(theme, "lineHighlight");
   if (lineHighlight) colors["editor.lineHighlightBackground"] = lineHighlight;
   const selection = scopeColor(theme, "selection");
@@ -182,10 +202,13 @@ function buildMonacoTheme(
   for (const [scope, token] of Object.entries(SCOPE_TO_MONACO_TOKEN)) {
     if (!token) continue;
     const color = scopeColor(theme, scope);
-    if (color) rules.push({ token, foreground: color.slice(1) });
+    if (color) {
+      rules.push({ token: scope, foreground: color.slice(1) });
+      rules.push({ token, foreground: color.slice(1) });
+    }
   }
 
-  return { base: base as "vs" | "vs-dark" | "hc-black", inherit: true, rules, colors };
+  return { base, inherit: true, rules, colors };
 }
 
 function themeIsDark(theme: CotTheme): boolean {
@@ -206,16 +229,43 @@ export function applyTheme(name: string): void {
     console.warn(`Unknown theme: ${name}`);
     return;
   }
+  const dark = themeIsDark(theme);
   setMonacoTheme(monacoThemeId(name));
-  document.documentElement.dataset.ceTheme = themeIsDark(theme) ? "dark" : "light";
+  document.documentElement.dataset.ceTheme = dark ? "dark" : "light";
   currentTheme = name;
+  try {
+    localStorage.setItem(STORAGE_KEY, name);
+  } catch {
+    // Storage can be denied by the WebView; keep the in-memory selection.
+  }
+  if ("runtime" in window) {
+    try {
+      if (dark) WindowSetDarkTheme();
+      else WindowSetLightTheme();
+    } catch (error) {
+      // Older runtimes/platforms may not implement native window theming.
+      console.warn("Native window theme could not be updated:", error);
+    }
+  }
+}
+
+/** Validated startup preference; retain Classic as the product default. */
+export function getPreferredTheme(): string {
+  if (currentTheme) return currentTheme;
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved && THEME_NAMES.some((name) => name === saved)) return saved;
+  } catch {
+    // Private/locked-down storage is not a startup failure.
+  }
+  return "Classic";
 }
 
 export function getCurrentTheme(): string | null {
   return currentTheme;
 }
 
-/** List available theme display names (suitable for a theme-switch menu). */
+/** Keep menu order stable even after a failed resource load and retry. */
 export function listThemes(): string[] {
-  return [...themeRegistry.keys()];
+  return THEME_NAMES.filter((name) => themeRegistry.has(name));
 }

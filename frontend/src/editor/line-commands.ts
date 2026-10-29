@@ -1,31 +1,11 @@
 /**
- * Line-processing Monaco commands (PLAN §阶段4).
- *
- * Wires the pure functions in `lib/text-operations` to Monaco editor actions so
- * they can be invoked via menu items or keyboard shortcuts.
- *
- * Each command:
- *  - operates on the whole document when there is no selection (mirrors
- *    CotEditor's `sortLinesAscending` / `reverseLines` behaviour);
- *  - otherwise operates on the lines spanned by the first selection;
- *  - pushes the edit onto Monaco's undo stack via `executeEdits` and restores a
- *    sensible selection (collapsed caret for transforms, shifted range for
- *    moves).
- *
- * Shortcuts follow CotEditor's Main.storyboard conventions, translated to
- * Windows (Ctrl instead of Cmd):
- *  - Move Up    : Ctrl+Shift+Up      (CotEditor: ⌃⌘↑)
- *  - Move Down  : Ctrl+Shift+Down    (CotEditor: ⌃⌘↓)
- *  - Duplicate  : Ctrl+Shift+D       (CotEditor: ⌘D)
- *  - Delete Line: Ctrl+Shift+K       (CotEditor: ⌘⇧⌫)
- *  - Join Lines : Ctrl+J             (CotEditor: ⌘J)
- *  - Sort       : F5                 (VS Code convention, no default clash)
- *  - Reverse    : Shift+F5
- *  - Dedupe     : Ctrl+Shift+F5
+ * Line-processing Monaco commands. All ranges are whole, touched lines; an
+ * endpoint at column 1 of the next line does not include that line. Overlapping
+ * spans are edited once, while selection order/direction is retained.
  */
 
 import type * as monaco from "monaco-editor";
-import { monaco as monacoNs, getEditor, getModel } from "./monaco-setup";
+import { monaco as monacoNs, getEditor } from "./monaco-setup";
 import {
   sortLines,
   reverseLines,
@@ -35,131 +15,222 @@ import {
   dedentLines,
   indentLines,
   outdentLines,
-  moveLineUp,
-  moveLineDown,
   shuffleLines,
-  duplicateLines,
-  deleteLines,
+  splitLines,
   joinLinesRange,
 } from "../lib/text-operations";
 
-/** Context object describing the line span a command should act on. */
 interface LineSpan {
-  text: string;
   startLine: number;
   endLine: number;
-  /** Monaco range covering exactly the spanned lines (for executeEdits). */
-  range: monaco.IRange;
-  /** Whether the selection was empty (whole-doc fallback applies). */
-  wholeDoc: boolean;
+  selectionIndexes: number[];
 }
 
-/**
- * Resolve the span of text a line command should transform.
- *
- * If the selection is empty, the whole document is used; otherwise the lines
- * touched by the primary selection. The returned `text` is the substring to
- * transform, and `range` is the Monaco range to replace with the result.
- */
-function resolveSpan(): LineSpan | null {
-  const editor = getEditor();
-  const model = getModel();
-  if (!editor || !model) return null;
+interface PlannedEdit {
+  range: monaco.Range;
+  text: string;
+  start: number;
+  end: number;
+}
 
-  const sel = editor.getSelection();
-  if (!sel) return null;
+/** Offsets relative to an edit's replacement, or original absolute offsets. */
+interface SelectionTarget {
+  edit?: PlannedEdit;
+  anchor: number;
+  active: number;
+}
 
-  if (sel.isEmpty()) {
-    const lineCount = model.getLineCount();
-    const fullRange = model.getFullModelRange();
-    return {
-      text: model.getValue(),
-      startLine: 1,
-      endLine: lineCount,
-      range: fullRange,
-      wholeDoc: true,
-    };
+function resolveSpans(
+  model: monaco.editor.ITextModel,
+  selections: monaco.Selection[],
+  wholeDoc: boolean,
+  mergeAdjacent = false,
+): LineSpan[] {
+  if (wholeDoc && selections.length === 1 && selections[0].isEmpty()) {
+    return [{ startLine: 1, endLine: model.getLineCount(), selectionIndexes: [0] }];
   }
-
-  return {
-    text: model.getValueInRange(sel),
+  const spans = selections.map((sel, index) => ({
     startLine: sel.startLineNumber,
-    endLine: sel.endLineNumber,
-    range: {
-      startLineNumber: sel.startLineNumber,
-      startColumn: 1,
-      endLineNumber: sel.endLineNumber,
-      endColumn: model.getLineMaxColumn(sel.endLineNumber),
-    },
-    wholeDoc: false,
+    endLine: sel.endLineNumber - (
+      sel.endColumn === 1 && sel.endLineNumber > sel.startLineNumber ? 1 : 0
+    ),
+    selectionIndexes: [index],
+  })).sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+  const merged: LineSpan[] = [];
+  for (const span of spans) {
+    const previous = merged[merged.length - 1];
+    if (previous && span.startLine <= previous.endLine + (mergeAdjacent ? 1 : 0)) {
+      previous.endLine = Math.max(previous.endLine, span.endLine);
+      previous.selectionIndexes.push(...span.selectionIndexes);
+    } else {
+      merged.push(span);
+    }
+  }
+  return merged;
+}
+
+function lineRange(model: monaco.editor.ITextModel, start: number, end: number): monaco.Range {
+  return new monacoNs.Range(start, 1, end, model.getLineMaxColumn(end));
+}
+
+function planEdit(model: monaco.editor.ITextModel, range: monaco.Range, text: string): PlannedEdit {
+  return {
+    range, text,
+    start: model.getOffsetAt(range.getStartPosition()),
+    end: model.getOffsetAt(range.getEndPosition()),
   };
 }
 
-/**
- * Apply a pure string transform to the current span and push it as a single
- * undoable edit, then restore the selection to the span.
- *
- * Used for sort/reverse/dedupe/trim where the output length may differ from the
- * input and we want the whole transformed region selected afterwards.
- */
-function applyTransform(
-  fn: (text: string) => string,
+function selectionTargets(model: monaco.editor.ITextModel, selections: monaco.Selection[]): SelectionTarget[] {
+  return selections.map((sel) => ({
+    anchor: model.getOffsetAt(sel.getSelectionStart()),
+    active: model.getOffsetAt(sel.getPosition()),
+  }));
+}
+
+/** Store cursor state IN the edit, not with setSelections afterwards (redo). */
+function executePlan(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  model: monaco.editor.ITextModel,
   actionId: string,
+  edits: PlannedEdit[],
+  targets: SelectionTarget[],
 ): void {
-  const editor = getEditor();
-  const model = getModel();
-  const span = resolveSpan();
-  if (!editor || !model || !span) return;
-
-  const result = fn(span.text);
-  if (result === span.text) return; // no-op
-
-  editor.executeEdits(actionId, [{ range: span.range, text: result }]);
-  // Select the replaced region.
-  const newEndLine = span.range.startLineNumber + result.split(/\r\n|\r|\n/).length - 1;
-  editor.setSelection({
-    startLineNumber: span.range.startLineNumber,
-    startColumn: 1,
-    endLineNumber: newEndLine,
-    endColumn: model.getLineMaxColumn(newEndLine),
-  });
+  // Return before pushing a stop: a no-op (blocked move, already-sorted text)
+  // must not split the user's running typing group into two undo entries.
+  if (edits.length === 0) return;
+  editor.pushUndoStop();
+  edits.sort((a, b) => a.start - b.start);
+  const newStarts = new Map<PlannedEdit, number>();
+  let delta = 0;
+  for (const edit of edits) {
+    newStarts.set(edit, edit.start + delta);
+    delta += edit.text.length - (edit.end - edit.start);
+  }
+  const mapUnchanged = (offset: number): number => {
+    let shift = 0;
+    for (const edit of edits) {
+      if (offset <= edit.start) break;
+      if (offset < edit.end) return edit.start + shift + Math.min(offset - edit.start, edit.text.length);
+      shift += edit.text.length - (edit.end - edit.start);
+    }
+    return offset + shift;
+  };
+  editor.executeEdits(actionId, edits.map(({ range, text }) => ({ range, text })), () =>
+    targets.map((target) => {
+      const start = target.edit ? newStarts.get(target.edit)! : 0;
+      const anchor = model.getPositionAt(target.edit ? start + target.anchor : mapUnchanged(target.anchor));
+      const active = model.getPositionAt(target.edit ? start + target.active : mapUnchanged(target.active));
+      return monacoNs.Selection.fromPositions(anchor, active);
+    }),
+  );
+  editor.pushUndoStop();
   editor.focus();
 }
 
-/**
- * Apply a move/duplicate/delete that returns a whole-text replacement plus a
- * shifted selection (absolute character offsets within the new text).
- */
-function applyWholeReplace(
-  fn: (text: string, s: number, e: number) =>
-    { text: string; selStart: number; selEnd: number } | null,
+/** Sort/reverse/etc. retain the legacy single-caret whole-document fallback. */
+function applyTransform(
+  fn: (text: string, model: monaco.editor.ITextModel) => string,
   actionId: string,
+  wholeDoc = true,
 ): void {
   const editor = getEditor();
-  const model = getModel();
-  if (!editor || !model) return;
+  const model = editor?.getModel();
+  const selections = editor?.getSelections();
+  if (!editor || !model || !selections) return;
+  const targets = selectionTargets(model, selections);
+  const edits: PlannedEdit[] = [];
+  for (const span of resolveSpans(model, selections, wholeDoc)) {
+    // Include a following delimiter: a selected empty last content line must
+    // not be mistaken by the pure transform for the document's terminal EOL.
+    const hasFollowingLine = span.endLine < model.getLineCount();
+    const range = hasFollowingLine
+      ? new monacoNs.Range(span.startLine, 1, span.endLine + 1, 1)
+      : lineRange(model, span.startLine, span.endLine);
+    const text = model.getValueInRange(range);
+    const result = fn(text, model);
+    if (result === text) continue;
+    const edit = planEdit(model, range, result);
+    edits.push(edit);
+    const selectedLength = hasFollowingLine && result.endsWith(model.getEOL())
+      ? result.length - model.getEOL().length : result.length;
+    for (const index of span.selectionIndexes) {
+      const reversed = selections[index].getDirection() === monacoNs.SelectionDirection.RTL;
+      targets[index] = {
+        edit,
+        anchor: reversed ? selectedLength : 0,
+        active: reversed ? 0 : selectedLength,
+      };
+    }
+  }
+  executePlan(editor, model, actionId, edits, targets);
+}
 
-  const sel = editor.getSelection();
-  if (!sel) return;
-  const startLine = sel.isEmpty() ? sel.startLineNumber : sel.startLineNumber;
-  const endLine = sel.isEmpty() ? sel.startLineNumber : sel.endLineNumber;
-  const fullText = model.getValue();
-  const res = fn(fullText, startLine, endLine);
-  if (!res) return;
+type LineEdit = "up" | "down" | "duplicate" | "delete";
 
-  const fullRange = model.getFullModelRange();
-  editor.executeEdits(actionId, [{ range: fullRange, text: res.text }]);
+/** Swap only a block and its neighbour, insert copies, or remove local lines. */
+function applyLineEdit(operation: LineEdit, actionId: string): void {
+  const editor = getEditor();
+  const model = editor?.getModel();
+  const selections = editor?.getSelections();
+  if (!editor || !model || !selections) return;
+  const targets = selectionTargets(model, selections);
+  const edits: PlannedEdit[] = [];
+  const eol = model.getEOL();
+  const lineCount = model.getLineCount();
+  const moving = operation === "up" || operation === "down";
+  // A terminal EOL is not a blank content line to swap into the document.
+  const lastContentLine = lineCount > 1 && model.getLineContent(lineCount) === "" ? lineCount - 1 : lineCount;
+  for (const span of resolveSpans(model, selections, false, moving || operation === "delete")) {
+    const start = span.startLine;
+    const end = moving ? Math.min(span.endLine, lastContentLine) : span.endLine;
+    if (end < start || (operation === "up" && start === 1) ||
+        (operation === "down" && end === lastContentLine)) continue;
+    const range = lineRange(model, start, end);
+    const blockStart = model.getOffsetAt(range.getStartPosition());
+    let edit: PlannedEdit;
+    let selectionOffset = 0;
+    if (operation === "delete") {
+      // Consume the following EOL, except at EOF where the preceding EOL must
+      // be consumed instead. Deleting every line leaves Monaco's empty line.
+      const deleteRange = end < lineCount
+        ? new monacoNs.Range(start, 1, end + 1, 1)
+        : start > 1
+          ? new monacoNs.Range(start - 1, model.getLineMaxColumn(start - 1), end, model.getLineMaxColumn(end))
+          : range;
+      edit = planEdit(model, deleteRange, "");
+      if (edit.start === edit.end) continue;
+    } else {
+      const block = model.getValueInRange(range);
+      if (operation === "duplicate") {
+        edit = planEdit(model, monacoNs.Range.fromPositions(range.getEndPosition()), eol + block);
+        selectionOffset = eol.length;
+      } else if (operation === "up") {
+        edit = planEdit(model, lineRange(model, start - 1, end), block + eol + model.getLineContent(start - 1));
+      } else {
+        const prefix = model.getLineContent(end + 1) + eol;
+        edit = planEdit(model, lineRange(model, start, end + 1), prefix + block);
+        selectionOffset = prefix.length;
+      }
+    }
+    edits.push(edit);
+    for (const index of span.selectionIndexes) {
+      const original = targets[index];
+      targets[index] = operation === "delete"
+        ? { edit, anchor: 0, active: 0 }
+        : {
+          edit,
+          anchor: selectionOffset + original.anchor - blockStart,
+          active: selectionOffset + original.active - blockStart,
+        };
+    }
+  }
+  executePlan(editor, model, actionId, edits, targets);
+}
 
-  // Convert absolute offsets to Monaco positions.
-  const startPos = model.getPositionAt(res.selStart);
-  const endPos = model.getPositionAt(res.selEnd);
-  editor.setSelection({
-    startLineNumber: startPos.lineNumber,
-    startColumn: startPos.column,
-    endLineNumber: endPos.lineNumber,
-    endColumn: endPos.column,
-  });
-  editor.focus();
+function indentationUnit(model: monaco.editor.ITextModel): string {
+  const { insertSpaces, tabSize } = model.getOptions();
+  return insertSpaces ? " ".repeat(tabSize) : "\t";
 }
 
 /** Register every line command and its keybinding on the editor instance. */
@@ -214,7 +285,7 @@ export function registerLineCommands(): void {
     {
       id: "coteditor.moveLineUp",
       label: "Move Line Up",
-      run: () => applyWholeReplace(moveLineUp, "moveLineUp"),
+      run: () => applyLineEdit("up", "moveLineUp"),
       keybindings: [
         monacoNs.KeyMod.CtrlCmd | monacoNs.KeyMod.Shift | monacoNs.KeyCode.UpArrow,
       ],
@@ -222,7 +293,7 @@ export function registerLineCommands(): void {
     {
       id: "coteditor.moveLineDown",
       label: "Move Line Down",
-      run: () => applyWholeReplace(moveLineDown, "moveLineDown"),
+      run: () => applyLineEdit("down", "moveLineDown"),
       keybindings: [
         monacoNs.KeyMod.CtrlCmd | monacoNs.KeyMod.Shift | monacoNs.KeyCode.DownArrow,
       ],
@@ -230,31 +301,33 @@ export function registerLineCommands(): void {
     {
       id: "coteditor.duplicateLine",
       label: "Duplicate Line",
-      run: () => applyWholeReplace(duplicateLines, "duplicateLine"),
+      run: () => applyLineEdit("duplicate", "duplicateLine"),
       keybindings: [monacoNs.KeyMod.CtrlCmd | monacoNs.KeyMod.Shift | monacoNs.KeyCode.KeyD],
     },
     {
       id: "coteditor.deleteLine",
       label: "Delete Line",
-      run: () => applyWholeReplace(deleteLines, "deleteLine"),
+      run: () => applyLineEdit("delete", "deleteLine"),
       keybindings: [monacoNs.KeyMod.CtrlCmd | monacoNs.KeyMod.Shift | monacoNs.KeyCode.KeyK],
     },
     {
       id: "coteditor.joinLines",
       label: "Join Lines",
-      run: () => applyWholeReplace(joinLinesRange, "joinLines"),
+      run: () => applyTransform((text) =>
+        joinLinesRange(text, 1, splitLines(text).lines.length)?.text ?? text,
+      "joinLines", false),
       keybindings: [monacoNs.KeyMod.CtrlCmd | monacoNs.KeyCode.KeyJ],
     },
     {
       id: "coteditor.indentLines",
       label: "Indent Lines",
-      run: () => applyTransform((t) => indentLines(t), "indentLines"),
+      run: () => applyTransform((t, model) => indentLines(t, indentationUnit(model)), "indentLines"),
       keybindings: [monacoNs.KeyMod.CtrlCmd | monacoNs.KeyCode.BracketRight],
     },
     {
       id: "coteditor.outdentLines",
       label: "Outdent Lines",
-      run: () => applyTransform((t) => outdentLines(t), "outdentLines"),
+      run: () => applyTransform((t, model) => outdentLines(t, indentationUnit(model), model.getOptions().tabSize), "outdentLines"),
       keybindings: [monacoNs.KeyMod.CtrlCmd | monacoNs.KeyCode.BracketLeft],
     },
     {

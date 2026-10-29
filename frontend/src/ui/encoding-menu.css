@@ -1,0 +1,128 @@
+/* Encoding trigger + menu. Every selector is scoped to ce-encoding-* so the
+   control can live inside the statusbar without leaking styles. */
+
+.ce-encoding-root {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ce-encoding-trigger {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.ce-encoding-trigger::after {
+  width: 5px;
+  height: 5px;
+  margin-left: 1px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  content: "";
+  opacity: 0.7;
+  transform: rotate(45deg) translateY(-1px);
+}
+
+.ce-encoding-trigger:hover:not(:disabled),
+.ce-encoding-trigger[aria-expanded="true"] {
+  border-color: var(--ce-border);
+  background: var(--ce-hover);
+}
+
+.ce-encoding-trigger:disabled {
+  opacity: 0.5;
+}
+
+.ce-encoding-trigger:disabled::after {
+  display: none;
+}
+
+.ce-encoding-menu {
+  position: absolute;
+  z-index: 1200;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 250px;
+  max-height: min(70vh, 460px);
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--ce-border);
+  border-radius: 7px;
+  background: var(--ce-surface-raised);
+  color: var(--ce-fg);
+  box-shadow: var(--ce-shadow);
+}
+
+.ce-encoding-menu[data-align="right"] {
+  right: 0;
+  left: auto;
+}
+
+.ce-encoding-menu[hidden] {
+  display: none;
+}
+
+.ce-encoding-group {
+  padding: 3px 0;
+}
+
+.ce-encoding-group + .ce-encoding-group {
+  margin-top: 3px;
+  border-top: 1px solid var(--ce-border);
+}
+
+.ce-encoding-group-label {
+  padding: 2px 9px 3px;
+  color: var(--ce-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.ce-encoding-group[data-current="true"] .ce-encoding-group-label {
+  color: var(--ce-accent);
+}
+
+.ce-encoding-group[data-current="true"] .ce-encoding-group-label::after {
+  margin-left: 5px;
+  content: "\2713";
+}
+
+.ce-encoding-item {
+  display: block;
+  width: 100%;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ce-fg);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.ce-encoding-item:hover:not(:disabled),
+.ce-encoding-item:focus-visible {
+  outline: 0;
+  background: var(--ce-accent);
+  color: var(--ce-accent-fg);
+}
+
+.ce-encoding-item:disabled {
+  opacity: 0.42;
+}

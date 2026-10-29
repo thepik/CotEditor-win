@@ -1,0 +1,100 @@
+/* Recovery draft picker. All selectors are scoped to ce-recovery-*; the
+   shared modal shell comes from styles.css. */
+
+.ce-recovery-card {
+  width: 640px;
+}
+
+.ce-recovery-body {
+  padding: 15px 16px 14px;
+}
+
+.ce-recovery-intro {
+  margin: 0 0 11px;
+  color: var(--ce-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.ce-recovery-list {
+  max-height: min(48vh, 380px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+  padding: 2px;
+}
+
+.ce-recovery-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 14px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--ce-radius);
+  background: var(--ce-surface);
+  cursor: default;
+}
+
+.ce-recovery-item:hover {
+  background: var(--ce-hover);
+}
+
+.ce-recovery-item.ce-recovery-item-selected {
+  border-color: var(--ce-accent);
+  background: color-mix(in srgb, var(--ce-accent) 10%, var(--ce-surface));
+}
+
+.ce-recovery-name {
+  grid-column: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ce-fg);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ce-recovery-path {
+  grid-column: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ce-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ce-recovery-meta {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  color: var(--ce-subtle);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ce-recovery-badge {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin-top: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ce-warning) 16%, transparent);
+  color: var(--ce-warning);
+  font-size: 10.5px;
+}
+
+.ce-recovery-empty {
+  margin: 0;
+  padding: 26px 12px;
+  color: var(--ce-muted);
+  font-size: 13px;
+  font-style: italic;
+  text-align: center;
+}

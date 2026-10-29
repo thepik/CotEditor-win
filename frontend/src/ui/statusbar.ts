@@ -1,12 +1,6 @@
-/**
- * Bottom statusbar: document statistics, file state, and cursor position.
- *
- * Pure DOM render. `updateStatusbar` is called from main.ts on cursor move and
- * content change; it does a cheap full re-render since the bar has ~3 fields.
- * Strings go through the i18n module so the bar follows the live language.
- */
-
+/** Stable statusbar nodes: cursor movement updates only position fields. */
 import { t } from "../lib/i18n";
+import { createEncodingMenu, type EncodingMenuApi } from "./encoding-menu";
 
 export type SaveState = "idle" | "unsaved" | "saving" | "saved" | "error";
 
@@ -15,57 +9,143 @@ export interface StatusbarState {
   dirty: boolean;
   line: number;
   column: number;
-  /** Active CotEditor syntax name, or null for plaintext. */
   syntax: string | null;
   encoding: string;
-  lineEnding: "LF" | "CRLF" | "CR";
+  lineEnding: "LF" | "CRLF" | "CR" | "MIXED";
   saveState: SaveState;
-  /** Total number of lines in the buffer. */
   lineCount: number;
-  /** Total number of UTF-16 code units in the buffer. */
-  characterCount: number;
-  /** UTF-16 offset of the cursor from the beginning of the buffer. */
+  /** User-perceived graphemes, or explicitly labelled code points on old engines. */
+  characterCount: number | null;
+  characterKind: "graphemes" | "codePoints";
   cursorOffset: number;
-  /** Size of the document as it will be written to disk, in bytes. */
-  byteSize: number;
+  /** Null means a throttled calculation is pending, not zero bytes. */
+  byteSize: number | null;
+  readOnlyReason: string | null;
+  onNormalize?: () => void;
+  /** Statusbar encoding menu handlers (stable references from main.ts). */
+  onEncodingReopen?: (encoding: string) => void;
+  onEncodingSave?: (encoding: string) => void;
+  /** False disables the encoding trigger (e.g. no active document). */
+  encodingEnabled?: boolean;
+}
+
+let renderedHost: HTMLElement | null = null;
+const fields = new Map<string, HTMLElement>();
+const formatter = new Intl.NumberFormat();
+let normalize: (() => void) | undefined;
+let encodingMenu: EncodingMenuApi | null = null;
+let lastEncodingReopen: ((encoding: string) => void) | undefined;
+let lastEncodingSave: ((encoding: string) => void) | undefined;
+
+function setText(field: string, value: string): void {
+  const node = fields.get(field);
+  if (node && node.textContent !== value) node.textContent = value;
+}
+
+function ensureNodes(): boolean {
+  const host = document.getElementById("statusbar");
+  if (!host) return false;
+  if (host === renderedHost) return true;
+  if (encodingMenu) {
+    encodingMenu.destroy();
+    encodingMenu = null;
+  }
+  lastEncodingReopen = undefined;
+  lastEncodingSave = undefined;
+  renderedHost = host;
+  host.setAttribute("role", "contentinfo");
+  host.setAttribute("aria-label", t("a11y.statusbar"));
+  host.innerHTML =
+    '<span class="sb-item sb-stat" data-stat="lines"></span>' +
+    '<span class="sb-item sb-stat" data-stat="characters"></span>' +
+    '<span class="sb-item sb-stat" data-stat="position"></span>' +
+    '<span class="sb-item sb-stat" data-stat="cursor"></span>' +
+    '<span class="sb-item sb-path"><span class="sb-file-dot" aria-hidden="true"></span><span data-stat="name"></span></span>' +
+    '<span class="sb-item sb-save" role="status" aria-live="polite" aria-atomic="true"><span class="sb-save-dot" aria-hidden="true"></span><span data-stat="save"></span></span>' +
+    '<span class="sb-item sb-syntax" data-stat="syntax"></span>' +
+    '<span class="sb-item sb-meta sb-size" data-stat="bytes"></span>' +
+    '<span class="sb-item sb-meta" data-stat="encoding"></span>' +
+    '<span class="sb-item sb-meta" data-stat="eol"></span>' +
+    '<span class="sb-item sb-meta" data-stat="readonly" role="status" aria-live="polite"></span>' +
+    '<button type="button" class="sb-item sb-meta" data-stat="normalize"></button>';
+  fields.clear();
+  for (const node of host.querySelectorAll<HTMLElement>("[data-stat]")) {
+    fields.set(node.dataset.stat!, node);
+  }
+  const normalizeButton = fields.get("normalize")!;
+  // Keep the action visually part of the bar until styles.css owns a rule.
+  normalizeButton.style.cssText =
+    "font:inherit;color:var(--ce-accent);background:none;border:0;padding:0;cursor:pointer;";
+  normalizeButton.addEventListener("click", () => normalize?.());
+
+  // The encoding menu replaces the passive label. The original span stays in
+  // the DOM (hidden) so diagnostics and older regressions can still read the
+  // documented `data-stat="encoding"` field without parsing menu labels.
+  const legacyEncoding = fields.get("encoding")!;
+  const menuHost = document.createElement("span");
+  menuHost.className = "sb-item sb-meta sb-encoding";
+  menuHost.dataset.encodingHost = "true";
+  legacyEncoding.hidden = true;
+  legacyEncoding.setAttribute("aria-hidden", "true");
+  legacyEncoding.before(menuHost);
+  encodingMenu = createEncodingMenu({ host: menuHost, current: "UTF-8", disabled: true });
+  return true;
+}
+
+export function updateStatusbarCursor(line: number, column: number, offset: number): void {
+  setText("position", `${t("status.position")}: ${formatter.format(offset)}`);
+  setText("cursor", `${t("status.line")} ${formatter.format(line)}, ${t("status.column")} ${formatter.format(column)}`);
 }
 
 export function updateStatusbar(state: StatusbarState): void {
-  const host = document.getElementById("statusbar");
-  if (!host) return;
-
+  if (!ensureNodes()) return;
+  const host = renderedHost!;
+  host.setAttribute("aria-label", t("a11y.statusbar"));
   const name = state.path ? baseName(state.path) : t("status.untitled");
-  const full = state.path ?? t("status.untitled");
-  const syntaxLabel = state.syntax ?? t("syntax.plainText");
-  const encodingLabel = state.encoding.toUpperCase() === "UTF-8" ? "Unicode (UTF-8)" : state.encoding;
-  const saveLabel =
-    state.saveState === "unsaved"
-      ? t("status.unsaved")
-      : state.saveState === "saving"
-        ? t("status.saving")
-        : state.saveState === "error"
-          ? t("status.saveError")
-          : state.saveState === "saved"
-            ? t("status.saved")
-            : "";
+  setText("lines", `${t("status.totalLines")}: ${formatter.format(state.lineCount)}`);
+  setText("characters", `${t(state.characterKind === "graphemes" ? "status.characters" : "status.codePoints")}: ${state.characterCount === null ? "…" : formatter.format(state.characterCount)}`);
+  updateStatusbarCursor(state.line, state.column, state.cursorOffset);
+  fields.get("position")!.title = t("status.utf16Position");
+  setText("name", name);
+  const path = host.querySelector<HTMLElement>(".sb-path")!;
+  path.title = state.path ?? name;
+  path.querySelector(".sb-file-dot")!.classList.toggle("is-dirty", state.dirty);
 
-  host.innerHTML =
-    `<span class="sb-item sb-stat">${escapeHtml(t("status.totalLines"))}: ${formatNumber(state.lineCount)}</span>` +
-    `<span class="sb-item sb-stat">${escapeHtml(t("status.characters"))}: ${formatNumber(state.characterCount)}</span>` +
-    `<span class="sb-item sb-stat">${escapeHtml(t("status.position"))}: ${formatNumber(state.cursorOffset)}</span>` +
-    `<span class="sb-item sb-stat">${escapeHtml(t("status.currentLine"))}: ${formatNumber(state.line)}</span>` +
-    `<span class="sb-item sb-path" title="${escapeHtml(full)}"><span class="sb-file-dot${state.dirty ? " is-dirty" : ""}"></span>${escapeHtml(name)}</span>` +
-    (saveLabel
-      ? `<span class="sb-item sb-save" data-state="${state.saveState}"><span class="sb-save-dot"></span>${escapeHtml(saveLabel)}</span>`
-      : "") +
-    `<span class="sb-item sb-syntax" title="${escapeHtml(t("menu.syntax"))}">${escapeHtml(syntaxLabel)}</span>` +
-    `<span class="sb-item sb-meta sb-size">${formatBytes(state.byteSize)}</span>` +
-    `<span class="sb-item sb-meta sb-select-like">${escapeHtml(encodingLabel)}</span>` +
-    `<span class="sb-item sb-meta sb-select-like">${state.lineEnding}</span>`;
-}
-
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat().format(value);
+  const save = host.querySelector<HTMLElement>(".sb-save")!;
+  save.dataset.state = state.saveState;
+  save.style.display = state.saveState === "idle" ? "none" : "";
+  setText("save", state.saveState === "idle" ? "" : t({
+    unsaved: "status.unsaved", saving: "status.saving", saved: "status.saved", error: "status.saveError",
+  }[state.saveState]));
+  setText("syntax", state.syntax ?? t("syntax.plainText"));
+  fields.get("syntax")!.title = t("menu.syntax");
+  setText("bytes", state.byteSize === null ? "…" : formatBytes(state.byteSize));
+  setText("encoding", state.encoding.toUpperCase() === "UTF-8" ? "Unicode (UTF-8)" : state.encoding);
+  if (encodingMenu) {
+    encodingMenu.setEncoding(state.encoding);
+    if (state.onEncodingReopen !== lastEncodingReopen || state.onEncodingSave !== lastEncodingSave) {
+      lastEncodingReopen = state.onEncodingReopen;
+      lastEncodingSave = state.onEncodingSave;
+      encodingMenu.setHandlers({
+        reopen: state.onEncodingReopen,
+        save: state.onEncodingSave,
+      });
+    }
+    encodingMenu.setEnabled(state.encodingEnabled !== false && Boolean(lastEncodingReopen || lastEncodingSave));
+  }
+  setText("eol", state.lineEnding === "MIXED" ? t("format.mixed") : state.lineEnding);
+  setText("readonly", state.readOnlyReason ? t("status.readOnly") : "");
+  fields.get("readonly")!.title = state.readOnlyReason ?? "";
+  fields.get("readonly")!.setAttribute(
+    "aria-label",
+    state.readOnlyReason ? `${t("status.readOnly")}: ${state.readOnlyReason}` : "",
+  );
+  fields.get("readonly")!.hidden = !state.readOnlyReason;
+  normalize = state.onNormalize;
+  fields.get("normalize")!.hidden = !normalize;
+  fields.get("normalize")!.title = state.readOnlyReason ?? "";
+  setText("normalize", t("format.normalizeLF"));
+  fields.get("normalize")!.setAttribute("aria-label", t("format.normalizeLF"));
 }
 
 function formatBytes(bytes: number): string {
@@ -74,14 +154,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1_000_000).toFixed(bytes < 10_000_000 ? 1 : 0)} MB`;
 }
 
-function baseName(p: string): string {
-  const norm = p.replace(/\\/g, "/");
-  const idx = norm.lastIndexOf("/");
-  return idx >= 0 ? norm.slice(idx + 1) : norm;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) =>
-    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;",
-  );
+function baseName(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1);
 }

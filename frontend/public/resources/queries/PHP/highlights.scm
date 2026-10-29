@@ -66,7 +66,8 @@
   "while"
   "xor"
   "yield"
-  "yield from"
+  ; This grammar splits yield from into two anonymous keyword nodes.
+  "from"
   (abstract_modifier)
   (final_modifier)
   (readonly_modifier)
@@ -76,23 +77,22 @@
 
 (function_static_declaration "static" @keywords)
 
-[
-  (php_tag)
-  (php_end_tag)
-] @keywords.tag
+(php_tag) @keywords.tag
+(text_interpolation "?>" @keywords.tag)
 
 
 ; MARK: Commands
 ; ----------------------------
 
-(namespace_use_clause
-  type: "function"
-  [
-    (name) @commands
-    (qualified_name
-      (name) @commands)
-    alias: (name) @commands
-  ])
+; Import kind belongs to the declaration; aliases have their own clause.
+(namespace_use_declaration
+  "function"
+  (namespace_use_clause
+    [
+      (name) @commands
+      (qualified_name (name) @commands)
+      (namespace_aliasing_clause (name) @commands)
+    ]))
 
 (array_creation_expression "array" @commands.builtin)
 (list_literal "list" @commands.builtin)
@@ -104,7 +104,6 @@
 (function_call_expression
   function: [
     (qualified_name (name))
-    (relative_name (name))
     (name)
   ] @commands)
 
@@ -131,23 +130,23 @@
 (namespace_name
   (name) @types)
   
-(relative_name "namespace" @types.builtin)
+; Relative names are qualified_name with a namespace_name_as_prefix here.
+(namespace_name_as_prefix "namespace" @types.builtin)
 
-(namespace_use_clause
-  !type
-  [
-    (name) @types
-    (qualified_name
-      (name) @types)
-    alias: (name) @types
-  ])
+((namespace_use_declaration
+  (namespace_use_clause
+    [
+      (name) @types
+      (qualified_name (name) @types)
+      (namespace_aliasing_clause (name) @types)
+    ])) @_import
+  (#not-match? @_import "^use[\\t ]+(function|const)\\b"))
 
 (primitive_type) @types.builtin
 (cast_type) @types.builtin
 (named_type [
   (name) @types
   (qualified_name (name) @types)
-  (relative_name (name) @types)
 ]) @types
 (named_type (name) @types.builtin
   (#any-of? @types.builtin "static" "self" "parent"))
@@ -155,22 +154,19 @@
 (object_creation_expression [
   (name) @types
   (qualified_name (name) @types)
-  (relative_name (name) @types)
 ])
 
 (base_clause
   [
     (name) @types
     (qualified_name (name) @types)
-    (relative_name (name) @types)
-  ])
+    ])
 
 (class_interface_clause
   [
     (name) @types
     (qualified_name (name) @types)
-    (relative_name (name) @types)
-  ])
+    ])
 
 (class_declaration
   name: (name) @types)
@@ -185,15 +181,13 @@
   scope: [
     (name) @types
     (qualified_name (name) @types)
-    (relative_name (name) @types)
-  ])
+    ])
 
 (class_constant_access_expression
   [
     (name) @types
     (qualified_name (name) @types)
-    (relative_name (name) @types)
-  ])
+    ])
 
 
 ; MARK: Attributes
@@ -206,8 +200,6 @@
 (attribute [
   (name) @attributes
   (qualified_name
-    (name) @attributes)
-  (relative_name
     (name) @attributes)
 ])
 
@@ -254,14 +246,14 @@
 ; MARK: Values
 ; ----------------------------
 
-(namespace_use_clause
-  type: "const"
-  [
-    (name) @values
-    (qualified_name
-      (name) @values)
-    alias: (name) @values
-  ])
+(namespace_use_declaration
+  "const"
+  (namespace_use_clause
+    [
+      (name) @values
+      (qualified_name (name) @values)
+      (namespace_aliasing_clause (name) @values)
+    ]))
 
 ; magic constants
 ((name) @values

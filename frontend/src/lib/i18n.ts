@@ -107,8 +107,13 @@ const dictEn: Record<string, string> = {
   /* file menu */
   "file.new": "New",
   "file.open": "Open…",
+  "file.openWithEncoding": "Open with Encoding…",
   "file.save": "Save",
   "file.saveAs": "Save As…",
+  "file.closeTab": "Close Tab",
+  "file.openRecent": "Open Recent",
+  "file.noRecent": "No Recent Files",
+  "file.autoSave": "Auto Save",
 
   /* edit menu */
   "edit.undo": "Undo",
@@ -118,7 +123,9 @@ const dictEn: Record<string, string> = {
   "edit.paste": "Paste",
   "edit.selectAll": "Select All",
   "edit.find": "Find",
+  "edit.findAll": "Find All in Document…",
   "edit.replace": "Replace",
+  "edit.replaceAllPreview": "Preview Replace All…",
   "edit.multipleReplace": "Multiple Replace…",
 
   /* view menu */
@@ -129,6 +136,8 @@ const dictEn: Record<string, string> = {
   "view.zoomOut": "Zoom Out",
   "view.language": "Language",
   "view.togglePreview": "Toggle Preview",
+  "view.toggleSplit": "Split Preview",
+  "view.toggleOutline": "Show Outline",
 
   /* format menu */
   "format.sortLines": "Sort Lines",
@@ -160,17 +169,43 @@ const dictEn: Record<string, string> = {
   "toolbar.save": "Save",
   "toolbar.saveAs": "Save As…",
   "toolbar.edit": "Edit",
+  "toolbar.split": "Split",
   "toolbar.preview": "Preview",
 
   /* preview */
   "preview.empty": "Nothing to preview",
 
+  /* find results */
+  "find.queryPrompt": "Text to find in this document",
+  "find.replacePrompt": "Replacement text (preview only, nothing is changed)",
+  "find.replacePreview":
+    "Preview only: {count} match(es) would be replaced. The document was not modified.",
+
+  /* accessibility labels */
+  "a11y.toolbar": "Main toolbar",
+  "a11y.workspace": "Editor workspace",
+  "a11y.editor": "Editor",
+  "a11y.findResults": "Find results",
+  "a11y.statusbar": "Status bar",
+  "a11y.outline": "Outline",
+
   /* statusbar */
   "status.untitled": "Untitled",
   "status.line": "Ln",
   "status.column": "Col",
-  "status.totalLines": "Lines",
-  "status.characters": "Characters",
+  "status.totalLines": "Total lines",
+  "status.characters": "Graphemes",
+  "status.codePoints": "Code points",
+  "status.readOnly": "Read-only",
+  "status.utf16Position": "Cursor offset in UTF-16 code units",
+  "status.newerEdits": "The snapshot was saved, but newer edits remain. Save again before switching documents.",
+  "format.mixed": "Mixed EOL",
+  "format.mixedReadOnly": "Mixed line endings: read-only. Monaco normalizes the displayed text; the original file has NOT been rewritten. Choose Normalize to LF to explicitly allow conversion and editing.",
+  "format.unsupportedReadOnly": "Unsupported encoding or binary content: read-only. Saving and automatic write-back are disabled.",
+  "format.normalizeLF": "Normalize to LF…",
+  "format.normalizeTitle": "Convert all line endings to LF?",
+  "format.normalizeMessage": "This file contains mixed line endings. Their original layout cannot be preserved by this editor. All line endings will be converted to LF.",
+  "format.normalizeHint": "Confirming enables editing and automatic saving to the current file. Cancel keeps the original file untouched and read-only.",
   "status.position": "Position",
   "status.currentLine": "Line",
   "syntax.plainText": "Plain Text",
@@ -186,6 +221,10 @@ const dictEn: Record<string, string> = {
   "unsaved.save": "Save",
   "unsaved.discard": "Don't Save",
   "unsaved.cancel": "Cancel",
+  "close.title": "Save all changes before closing?",
+  "close.message": "These documents have unsaved changes: {names}.",
+  "close.hint": "Save All writes every changed document, then quits. Don't Save discards them and quits. Cancel keeps the window open.",
+  "close.saveAll": "Save All",
   "error.openFailed": "Could not open the file: ",
   "error.saveFailed": "Could not save the file: ",
   "error.autosaveFailed": "Automatic save failed: ",
@@ -242,8 +281,10 @@ const dictEn: Record<string, string> = {
   /* shortcuts dialog */
   "sc.title": "CotEditor-win - Keyboard Shortcuts",
   "sc.file": "File:  Ctrl+N new  |  Ctrl+O open  |  Ctrl+S save  |  Ctrl+Shift+S save as",
-  "sc.edit": "Edit:  Ctrl+Z undo  |  Ctrl+Y redo  |  Ctrl+F find  |  Ctrl+H replace",
+  "sc.edit": "Edit:  Ctrl+Z undo  |  Ctrl+Y redo  |  Ctrl+F find  |  Ctrl+Shift+F find all  |  Ctrl+H replace",
   "sc.multi": "Multi: Ctrl+Shift+H multiple replace",
+  "sc.tabs": "Tabs: Ctrl+W close  |  Ctrl+Tab next  |  Ctrl+Shift+Tab previous  |  Ctrl+1..9 switch",
+  "sc.preview": "Preview: Ctrl+E full screen  |  Ctrl+Shift+E split  |  Ctrl+Shift+O outline",
   "sc.format": "Format:",
   "sc.sortLines": "  Sort lines      Ctrl+F5",
   "sc.reverseLines": "  Reverse lines   Ctrl+Shift+F5",
@@ -270,8 +311,13 @@ const dictZh: Record<string, string> = {
 
   "file.new": "新建",
   "file.open": "打开…",
+  "file.openWithEncoding": "以编码打开…",
   "file.save": "保存",
   "file.saveAs": "另存为…",
+  "file.closeTab": "关闭标签",
+  "file.openRecent": "最近打开",
+  "file.noRecent": "无最近文件",
+  "file.autoSave": "自动保存",
 
   "edit.undo": "撤销",
   "edit.redo": "重做",
@@ -280,7 +326,9 @@ const dictZh: Record<string, string> = {
   "edit.paste": "粘贴",
   "edit.selectAll": "全选",
   "edit.find": "查找",
+  "edit.findAll": "在文档中查找全部…",
   "edit.replace": "替换",
+  "edit.replaceAllPreview": "替换全部预览…",
   "edit.multipleReplace": "多重替换…",
 
   "view.lineNumbers": "切换行号显示",
@@ -290,6 +338,8 @@ const dictZh: Record<string, string> = {
   "view.zoomOut": "缩小",
   "view.language": "界面语言",
   "view.togglePreview": "切换预览",
+  "view.toggleSplit": "分屏预览",
+  "view.toggleOutline": "显示大纲",
 
   "format.sortLines": "排序行",
   "format.sortLinesDesc": "排序行（降序）",
@@ -317,16 +367,41 @@ const dictZh: Record<string, string> = {
   "toolbar.save": "保存",
   "toolbar.saveAs": "另存为…",
   "toolbar.edit": "编辑",
+  "toolbar.split": "分屏",
   "toolbar.preview": "预览",
 
   /* preview */
   "preview.empty": "暂无内容可预览",
 
+  /* find results */
+  "find.queryPrompt": "要在当前文档中查找的文本",
+  "find.replacePrompt": "替换文本（仅预览，不会修改文档）",
+  "find.replacePreview": "仅预览：将替换 {count} 处，文档未被修改。",
+
+  /* accessibility labels */
+  "a11y.toolbar": "主工具栏",
+  "a11y.workspace": "编辑器工作区",
+  "a11y.editor": "编辑器",
+  "a11y.findResults": "查找结果",
+  "a11y.statusbar": "状态栏",
+  "a11y.outline": "大纲",
+
   "status.untitled": "未命名",
   "status.line": "行",
   "status.column": "列",
-  "status.totalLines": "行",
-  "status.characters": "字符",
+  "status.totalLines": "总行数",
+  "status.characters": "字素",
+  "status.codePoints": "码点",
+  "status.readOnly": "只读",
+  "status.utf16Position": "光标偏移量（UTF-16 码元）",
+  "status.newerEdits": "本次快照已保存，但仍有较新的编辑未保存。请再次保存后再切换文档。",
+  "format.mixed": "混合换行",
+  "format.mixedReadOnly": "混合换行文件现为只读。编辑器仅归一化显示，尚未改写原文件；如需转换并编辑，请明确选择“统一为 LF”。",
+  "format.unsupportedReadOnly": "不支持的编码或二进制内容：仅可只读查看，已禁止保存和自动写回。",
+  "format.normalizeLF": "统一为 LF…",
+  "format.normalizeTitle": "将所有换行统一为 LF？",
+  "format.normalizeMessage": "此文件包含混合换行。编辑器无法保留原有混合换行分布，继续后会将全部换行转换为 LF。",
+  "format.normalizeHint": "确认后允许编辑，并恢复向当前文件自动保存；取消将保留原文件不变，继续只读查看。",
   "status.position": "位置",
   "status.currentLine": "行",
   "syntax.plainText": "纯文本",
@@ -341,6 +416,10 @@ const dictZh: Record<string, string> = {
   "unsaved.save": "保存",
   "unsaved.discard": "不保存",
   "unsaved.cancel": "取消",
+  "close.title": "关闭前保存所有更改？",
+  "close.message": "以下文档包含尚未保存的更改：{names}。",
+  "close.hint": "“全部保存”会写入所有已更改文档后退出；“不保存”将丢弃更改并退出；“取消”保持窗口打开。",
+  "close.saveAll": "全部保存",
   "error.openFailed": "无法打开文件：",
   "error.saveFailed": "无法保存文件：",
   "error.autosaveFailed": "自动保存失败：",
@@ -392,8 +471,10 @@ const dictZh: Record<string, string> = {
 
   "sc.title": "CotEditor-win - 键盘快捷键",
   "sc.file": "文件：Ctrl+N 新建 | Ctrl+O 打开 | Ctrl+S 保存 | Ctrl+Shift+S 另存为",
-  "sc.edit": "编辑：Ctrl+Z 撤销 | Ctrl+Y 重做 | Ctrl+F 查找 | Ctrl+H 替换",
+  "sc.edit": "编辑：Ctrl+Z 撤销 | Ctrl+Y 重做 | Ctrl+F 查找 | Ctrl+Shift+F 查找全部 | Ctrl+H 替换",
   "sc.multi": "多重：Ctrl+Shift+H 多重替换",
+  "sc.tabs": "标签：Ctrl+W 关闭 | Ctrl+Tab 下一个 | Ctrl+Shift+Tab 上一个 | Ctrl+1..9 切换",
+  "sc.preview": "预览：Ctrl+E 全屏 | Ctrl+Shift+E 分屏 | Ctrl+Shift+O 大纲",
   "sc.format": "格式：",
   "sc.sortLines": "  排序行          Ctrl+F5",
   "sc.reverseLines": "  反转行          Ctrl+Shift+F5",

@@ -3,98 +3,133 @@
  *
  * Wires together the three concerns of the app:
  *  1. The Monaco editor (mounted into #editor by `monaco-setup`).
- *  2. File IO, abstracted by `lib/file-bridge` so the same code runs in the
- *     Wails native window (Go methods) and in a plain browser dev server
- *     (File System Access API).
- *  3. UI panels (toolbar, statusbar, later: find panel, snippet manager).
+ *  2. A tabbed, multi-document session (`DocumentManager` + `DocumentStore` +
+ *     `ui/tabs`) with encoding-aware manual saves.
+ *  3. UI chrome (toolbar, statusbar, menus) that always reflects the active tab.
  *
- * This file stays thin: it bootstraps the editor and delegates the heavy lifting
- * to the modules under src/editor, src/lib and src/ui.
+ * This file stays thin: document policy lives in `lib/document-manager`, file IO
+ * in `lib/file-bridge`, and the panels under src/ui.
  */
 
 import "./styles.css";
-import { setupMonaco, getEditor, getModel, monaco } from "./editor/monaco-setup";
-import { loadAllThemes, applyTheme, getCurrentTheme, listThemes } from "./editor/theme-loader";
-import { detectSyntaxByPath, initSyntaxMap, listSyntaxes } from "./lib/syntax-map";
-import { attachLanguage, setModelLanguageByPath, setModelLanguageBySyntax } from "./editor/language-config";
+import { setupMonaco, getEditor, monaco } from "./editor/monaco-setup";
+import { loadAllThemes, applyTheme, getCurrentTheme, getPreferredTheme, listThemes } from "./editor/theme-loader";
+import { initSyntaxMap, listSyntaxes } from "./lib/syntax-map";
+import { attachLanguage } from "./editor/language-config";
 import { registerHighlightProviders, attachModelChangeTracking } from "./editor/highlight-tree-sitter";
 import { registerRegexHighlight, refreshRegexTokens } from "./editor/highlight-regex";
 import { registerAllGrammars } from "./editor/grammar-registry";
 import { wireToolbar, renderToolbar, type ViewMode } from "./ui/toolbar";
-import { updateStatusbar, type SaveState } from "./ui/statusbar";
-import { renderPreview, schedulePreviewRender, showPreview, hidePreview } from "./ui/preview";
+import { updateStatusbar, updateStatusbarCursor } from "./ui/statusbar";
+import { renderPreview, schedulePreviewRender, showPreview, showPreviewSplit, hidePreview, setPreviewResourceResolver, setPreviewLinkHandler } from "./ui/preview";
+import { createOutline, type OutlineController } from "./ui/outline";
 import { registerLineCommands } from "./editor/line-commands";
 import { openSnippetManager, registerSnippetShortcuts } from "./ui/snippet-manager";
-import { registerFindShortcuts, openFind, openReplace } from "./ui/find-panel";
+import { openFind, openReplace } from "./ui/find-panel";
+import { createFindResults, type FindResultsController } from "./ui/find-results";
 import { openMultipleReplacePanel } from "./ui/multiple-replace-ui";
+import { showToast } from "./ui/notifications";
 import { renderMenuBar, closeMenu, type MenuBar, type MenuItem } from "./ui/menubar";
 import { t, onLangChange, getLang, setLang, langName, type Lang } from "./lib/i18n";
-import { confirmUnsavedChanges } from "./ui/confirm-dialog";
-import { showToast } from "./ui/notifications";
+import { confirmNormalizeLineEndings, confirmCloseSession, confirmUnsavedChanges } from "./ui/confirm-dialog";
+import { createTabs, type TabsApi } from "./ui/tabs";
+import { DocumentManager, contentForDisk } from "./lib/document-manager";
 import {
-  openFile,
-  saveFile,
-  saveAsFile,
-  resetFileHandle,
-  setDocumentState,
+  loadSettings,
+  saveSettings,
+  applyEditorSettings,
+  subscribeSettings,
+  SETTINGS_LIMITS,
+  SETTINGS_STORAGE_KEY,
+  type Settings,
+} from "./lib/settings";
+import { listRecentFiles, removeRecentFile } from "./lib/recent-files";
+import {
   isWails,
+  isFileStampAvailable,
+  openFileWithEncoding,
+  setSessionDirty,
   startupFile,
-  openPath,
-  type FileContent,
 } from "./lib/file-bridge";
+import { RecoveryService, ensureRecoveryId } from "./lib/recovery-service";
+import { openRecoveryDialog } from "./ui/recovery-dialog";
+import { openConflictDialog, type ConflictDecision } from "./ui/conflict-dialog";
+import type { EncodingChoice } from "./ui/encoding-menu";
+import { AutoSaver } from "./lib/auto-save";
 import * as WailsRuntime from "./wailsjs/runtime/runtime";
+import * as WailsApp from "./wailsjs/go/main/App";
 
-/** Tracks the on-disk path/name of the current buffer, or null if untitled. */
-let currentPath: string | null = null;
-/** True when the buffer has unsaved changes; drives the title `·` marker. */
-let dirty = false;
-/**
- * The active CotEditor syntax name, or null for plaintext. Set by file
- * detection on open/save and by manual selection in the toolbar switcher.
- * Drives the toolbar select echo and the statusbar syntax label.
- */
-let currentSyntax: string | null = null;
-/**
- * Snapshot of `currentSyntax` at the last time the toolbar was rendered. Used
- * by `refreshChrome` to avoid rebuilding the toolbar (and disrupting the
- * language <select>) unless the syntax has actually changed.
- */
-let lastRenderedSyntax: string | null | undefined = undefined;
-/**
- * Snapshot of `viewMode` at the last toolbar render, so `refreshChrome` only
- * rebuilds the toolbar when the mode (or syntax) actually changes.
- */
-let lastRenderedMode: ViewMode | undefined = undefined;
-/**
- * Active view mode: `"edit"` shows the Monaco editor, `"preview"` shows the
- * rendered markdown panel. Only meaningful when `currentSyntax === "Markdown"`;
- * switching to a non-markdown file resets this to `"edit"`.
- */
+let manager: DocumentManager;
+let tabs: TabsApi;
+let recovery: RecoveryService;
+let currentSettings: Settings;
+const autoSaver = new AutoSaver();
+
+/** External-change poll cadence; the active tab is always checked first. */
+const EXTERNAL_POLL_MS = 2000;
+let pollInFlight = false;
+/** Documents whose conflict dialog is already open (never stack dialogs). */
+const conflictDialogs = new Set<string>();
+
+/** Stable handlers so the statusbar rebuilds its encoding menu only once. */
+const reopenEncodingHandler = (encoding: string): void => {
+  void reopenActiveWithEncoding(encoding as EncodingChoice);
+};
+const saveEncodingHandler = (encoding: string): void => {
+  void saveActiveWithEncoding(encoding as EncodingChoice);
+};
+
+/** Active tab's view mode; reset to edit when the active document isn't Markdown. */
 let viewMode: ViewMode = "edit";
-let currentEncoding = "UTF-8";
-let currentLineEnding: "LF" | "CRLF" | "CR" = "LF";
-let saveState: SaveState = "idle";
-let programmaticModelChange = false;
-let autosaveTimer: number | null = null;
-let saveInFlight: Promise<boolean> | null = null;
+let outline: OutlineController | null = null;
+let outlineHost: HTMLElement | null = null;
+let outlineSyncFrame: number | null = null;
+let lastRenderedSyntax: string | null | undefined = undefined;
+let lastRenderedMode: ViewMode | undefined = undefined;
+let composing = false;
+let closingForQuit = false;
 
-const AUTOSAVE_DELAY_MS = 250;
+/** Independent find-results list mounted into #find-results (Ctrl+Shift+F). */
+let findResults: FindResultsController | null = null;
+/** Last query used by "find all", reused as the prompt default. */
+let findAllQuery = "";
+/** Native/DOM file-drop wiring is bound exactly once per window. */
+let fileDropBound = false;
+/** Paths currently being opened, so duplicate drop/event deliveries collapse. */
+const openingPaths = new Set<string>();
+
+/** Preview assets are capped by the Go bridge; mirror the limit defensively. */
+const PREVIEW_MAX_ASSET_BYTES = 10 * 1024 * 1024;
+const DEFAULT_OUTLINE_WIDTH = 240;
+
+const STATISTICS_DELAY_MS = 150;
+let statisticsTimer: number | null = null;
+interface StatisticsEntry {
+  key: string;
+  characterCount: number;
+  byteSize: number;
+}
+const statisticsCache = new Map<string, StatisticsEntry>();
+const segmenter = typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
 
 async function bootstrap(): Promise<void> {
   // 1. Editor core.
   await setupMonaco();
   const editor = getEditor();
-  const model = getModel();
-  if (!editor || !model) throw new Error("Monaco failed to initialise");
+  if (!editor) throw new Error("Monaco failed to initialise");
 
-  // 2. Themes + syntax engines.
+  // 2. Themes, syntax engines and persisted editor settings.
   await initSyntaxMap();
   await loadAllThemes();
-  applyTheme("Classic");
+  applyTheme(getPreferredTheme());
+  const settings = loadSettings();
+  currentSettings = settings;
+  applyEditorSettings(editor, settings);
+  // The language menu predates the settings module and has its own storage.
+  // Only let settings override it when a settings payload actually exists.
+  if (hasStoredSettings() && settings.language !== getLang()) setLang(settings.language);
 
-  // Register Monaco language configs derived from .cotsyntax/Edit.json, and
-  // the two highlight engines (tree-sitter + regex). These are no-ops until a
-  // language is attached to a model.
   await attachLanguage();
   registerAllGrammars();
   registerHighlightProviders();
@@ -102,24 +137,149 @@ async function bootstrap(): Promise<void> {
   attachModelChangeTracking();
   registerLineCommands();
 
-  // Expose a small debug handle so the headless smoke test can read the live
-  // app state without re-importing modules (Vite HMR can hand a dynamic
-  // import a fresh, uninitialised module instance separate from the one the
-  // app bootstrap populated).
+  // 3. Tabs + document session. The tab strip is created before the manager so
+  // its callbacks and the manager's structural notifications can reference it.
+  recovery = new RecoveryService();
+  autoSaver.configure({
+    enabled: settings.autoSave,
+    delayMs: settings.autoSaveDelayMs,
+  });
+  const tabsHost = document.getElementById("tabs");
+  if (!tabsHost) throw new Error("#tabs host element not found");
+  tabs = createTabs(tabsHost, {
+    onActivate: (id) => {
+      if (manager.activate(id)) getEditor()?.focus();
+    },
+    onClose: (id) => { void closeDocument(id); },
+    onReorder: (ids) => manager.reorder(ids),
+    onNew: () => onNew(),
+  });
+
+  manager = new DocumentManager(editor, {
+    onStructureChange: () => {
+      syncTabs();
+      refreshChrome();
+      scheduleStatistics();
+    },
+    onActiveChange: () => {
+      // Results belong to the previous document's text; never keep them
+      // pointing at a buffer that is no longer active.
+      findResults?.clear();
+      tabs.setActive(manager.activeId ?? "");
+      reconcilePreviewForActive();
+      syncOutline();
+      refreshChrome();
+      scheduleStatistics();
+    },
+    onDocumentChange: (id) => {
+      updateTab(id);
+      const changed = manager.get(id);
+      if (changed) {
+        scheduleRecovery(changed);
+        scheduleAutoSave(changed);
+      }
+      if (manager.activeId !== id) return;
+      // The offsets recorded by the last search are stale after any edit.
+      findResults?.clear();
+      refreshChrome();
+      scheduleStatistics();
+      scheduleOutlineSync();
+      if (
+        (viewMode === "preview" || viewMode === "split")
+        && manager.activeSyntax() === "Markdown"
+      ) {
+        const document = manager.active;
+        if (document) schedulePreviewRender(document.model.getValue());
+      }
+    },
+    onSessionDirty: (dirty) => {
+      void setSessionDirty(dirty).catch((error) => {
+        console.warn("failed to sync session dirty state:", error);
+      });
+    },
+    onSaveConflict: (id) => {
+      void resolveFileConflict(id);
+    },
+    onDocumentSaved: (id, path) => {
+      const document = manager.get(id);
+      if (!document) return;
+      // If newer edits arrived while the write was in flight, the buffer is
+      // still dirty and the newest draft was just scheduled; clearing it here
+      // would lose the only copy of that text. Re-arm auto-save once the save
+      // transaction has cleared its in-flight marker.
+      if (document.dirty) {
+        window.setTimeout(() => {
+          const current = manager.get(id);
+          if (current) scheduleAutoSave(current);
+        }, 0);
+        return;
+      }
+      autoSaver.cancel(id);
+      const recoveryId = document.recoveryId;
+      if (recoveryId) {
+        void recovery.completeSave(recoveryId, path).then(() => {
+          // Edits that arrived while the draft discard was in flight still
+          // need a crash-safe copy.
+          const current = manager.get(id);
+          if (current?.dirty) scheduleRecovery(current);
+        });
+      }
+    },
+    onDocumentClosed: (id, recoveryId, savedOnClose) => {
+      autoSaver.cancel(id);
+      conflictDialogs.delete(id);
+      if (!savedOnClose && recoveryId) void recovery.discard(recoveryId);
+    },
+  });
+
+  // The fresh launch starts with one reusable untitled placeholder tab.
+  manager.createBlank(true);
+
+  // Preview resources/links are resolved against the active document's path.
+  installPreviewHandlers();
+  initOutline();
+  initFindResults();
+  applyChromeLabels();
+
+  // Expose read-only state for headless regressions. No command surface.
   const debug = {
     themeCount: 0,
     currentTheme: getCurrentTheme(),
     syntaxCount: 0,
+    document: () => {
+      const document = manager.active;
+      return {
+        documentId: document?.id ?? null,
+        activeId: manager.activeId,
+        path: document?.path ?? null,
+        dirty: document?.dirty ?? false,
+        conflict: document?.conflict ?? false,
+        encoding: document?.encoding ?? null,
+        saveState: document?.saveState ?? "idle",
+        documentOperationActive: manager.busy,
+        saveInFlight: manager.isSaving(),
+        formatProtection: document?.formatProtection ?? null,
+        anyDirty: manager.anyDirty(),
+      };
+    },
+    tabs: () => manager.tabItems(),
+    snapshot: (id?: string) =>
+      manager.snapshot(id ?? manager.activeId ?? ""),
+    activeValue: () => manager.active?.model.getValue() ?? "",
+    readOnly: () => getEditor()?.getOption(monaco.editor.EditorOption.readOnly) ?? false,
+    findResults: () => ({
+      open: findResults?.isOpen() ?? false,
+      count: findResults?.matchCount() ?? 0,
+    }),
   };
   // @ts-expect-error debug-only global
   window.__coteditor = debug;
-  // Defer the count reads until after the modules above are populated.
   queueMicrotask(() => {
     debug.themeCount = listThemes().length;
     debug.syntaxCount = listSyntaxes().length;
   });
 
-  // 3. UI.
+  // 4. Chrome.
   renderMenuBar(buildMenuBar());
   wireToolbar({
     onNew,
@@ -127,583 +287,1120 @@ async function bootstrap(): Promise<void> {
     onSave,
     onSaveAs,
     onSyntaxChange,
-    currentSyntax: () => currentSyntax,
+    currentSyntax: () => manager.activeSyntax(),
     onModeChange: setViewMode,
     currentMode: () => viewMode,
-    isPreviewAvailable: () => currentSyntax === "Markdown",
+    isPreviewAvailable: () => manager.activeSyntax() === "Markdown",
   });
   refreshChrome();
 
-  // Re-render the menu bar and document title when the UI language changes, so
-  // a mid-session switch (View > Language) updates chrome live. The toolbar
-  // and statusbar subscribe internally; the menu bar is rebuilt here because
-  // it owns the largest surface of translatable strings.
+  subscribeSettings((next) => {
+    const previous = currentSettings;
+    currentSettings = next;
+    const currentEditor = getEditor();
+    if (currentEditor) applyEditorSettings(currentEditor, next);
+    if (next.language !== getLang()) setLang(next.language);
+    autoSaver.configure({ enabled: next.autoSave, delayMs: next.autoSaveDelayMs });
+    if (next.autoSave
+      && (!previous.autoSave || previous.autoSaveDelayMs !== next.autoSaveDelayMs)) {
+      // Enabling or retuning auto-save applies to the buffer already being edited.
+      const document = manager.active;
+      if (document) scheduleAutoSave(document);
+    }
+    if (
+      previous.showOutline !== next.showOutline
+      || previous.outlineWidth !== next.outlineWidth
+    ) {
+      applyOutlineWidth();
+      syncOutline();
+      relayoutEditor();
+    }
+  });
+
   onLangChange(() => {
     closeMenu();
     renderMenuBar(buildMenuBar());
+    applyChromeLabels();
+    // The results module resolves its labels at creation time; rebuild the
+    // controller so its region/list/status labels follow the new language.
+    findResults?.destroy();
+    findResults = null;
+    initFindResults();
+    syncTabs();
     refreshChrome();
-    syncNativeDocumentState();
+    rerenderPreview();
   });
 
-  // Reflect buffer changes in the statusbar and dirty flag.
-  model.onDidChangeContent(() => {
-    if (programmaticModelChange) return;
-    dirty = true;
-    saveState = currentPath ? "saving" : "unsaved";
-    refreshChrome();
-    syncNativeDocumentState();
-    if (currentPath) scheduleAutosave();
-    // Live-update the preview pane while it is visible. Coalesced via rAF
-    // inside schedulePreviewRender so a burst of keystrokes repaints once.
-    if (viewMode === "preview" && currentSyntax === "Markdown") {
-      schedulePreviewRender(model.getValue());
+  editor.onDidChangeCursorPosition((e: { position: { lineNumber: number; column: number } }) => {
+    const model = editor.getModel();
+    if (!model) return;
+    updateStatusbarCursor(
+      e.position.lineNumber,
+      e.position.column,
+      model.getOffsetAt(e.position),
+    );
+    if (outline && outlineHost && !outlineHost.hidden) {
+      outline.setActiveLine(e.position.lineNumber);
     }
   });
-  editor.onDidChangeCursorPosition((e: { position: { lineNumber: number; column: number } }) => {
-    refreshStatusbar(e.position.lineNumber, e.position.column);
-  });
 
-  // 4. File operations + shortcuts.
   registerShortcuts();
-  registerFindShortcuts();
   registerSnippetShortcuts();
-  // Browsers provide their own generic unload confirmation. The native Wails
-  // window uses App.beforeClose instead, avoiding two stacked prompts.
+  // Split mode changes the editor's box; a window resize must relayout Monaco
+  // even when the preview stylesheet (not Monaco's observer) drove the change.
+  window.addEventListener("resize", relayoutEditor);
+  scheduleStatistics();
+
   if (!isWails()) {
     window.addEventListener("beforeunload", (event) => {
-      if (!dirty) return;
+      if (!manager.anyDirty()) return;
       event.preventDefault();
       event.returnValue = "";
     });
   }
-  window.addEventListener("blur", () => {
-    if (currentPath && dirty) void flushAutosave();
-  });
-  syncNativeDocumentState();
-  refreshChrome();
+  registerNativeEvents();
+  registerFileDrop();
 
-  // 5. Initial document from a command-line file (e.g. double-clicking a
-  // file in Explorer launches the app with the path as argv[1]). On a fresh
-  // start with no args, startupFile() resolves null and we keep the empty
-  // untitled buffer shown above.
+  // 5. Recovery drafts first (one modal), then the command-line file.
+  await maybeRestoreRecoveryDrafts();
+  startExternalChangeMonitor();
+
+  // 6. Command-line file at launch and second-instance forwards.
   void loadStartupFile();
+}
 
-  // When the app is already running and a second instance is launched with a
-  // file path, the Go SingleInstanceLock forwards the path here. We load it
-  // into the existing window, honouring the same dirty-guard as a manual open.
-  if (isWails()) {
-    WailsRuntime.EventsOn("app:open-path", (path: unknown) => {
-      if (typeof path !== "string" || path === "") return;
-      void openExternalPath(path);
-    });
+function hasStoredSettings(): boolean {
+  try {
+    return localStorage.getItem(SETTINGS_STORAGE_KEY) !== null;
+  } catch {
+    return false;
   }
 }
 
-/** Loads the file passed on the command line at launch, if any. */
 async function loadStartupFile(): Promise<void> {
   let path: string | null;
   try {
     path = await startupFile();
-  } catch (err) {
-    console.error("startupFile failed:", err);
+  } catch (error) {
+    console.error("startupFile failed:", error);
     return;
   }
   if (!path) return;
-  // On first launch the buffer is empty and clean, so we skip the dirty guard.
-  await openExternalPath(path, { skipDirtyGuard: true });
+  if (await manager.openPath(path)) getEditor()?.focus();
 }
 
-/** Opens a file by absolute path (startup arg or second-instance forward). */
-async function openExternalPath(
-  path: string,
-  opts: { skipDirtyGuard?: boolean } = {},
-): Promise<void> {
-  if (!opts.skipDirtyGuard && !(await prepareToReplaceDocument())) return;
+/* ------------------------- recovery drafts / auto-save -------------------- */
+
+/** Queue the newest draft for a dirty document; empty content is ignored. */
+function scheduleRecovery(document: ReturnType<DocumentManager["get"]>): void {
+  if (!document || !document.dirty || !recovery?.available) return;
+  const id = ensureRecoveryId(document);
+  recovery.schedule({
+    id,
+    path: document.path,
+    content: contentForDisk(document),
+    encoding: document.encoding,
+    lineEnding: document.lineEnding,
+  });
+}
+
+/**
+ * Auto-save is opt-in. It is gated on a real path, a dirty buffer and the
+ * absence of an unresolved conflict, so "cancel" in the conflict dialog also
+ * pauses automatic writes until the user decides.
+ */
+function scheduleAutoSave(document: ReturnType<DocumentManager["get"]>): void {
+  if (!document) return;
+  const eligible = currentSettings.autoSave
+    && !!document.path
+    && document.dirty
+    && !document.conflict
+    && !manager.isSaving(document.id);
+  if (!eligible) {
+    autoSaver.cancel(document.id);
+    return;
+  }
+  autoSaver.schedule(document.id, () => {
+    const current = manager.get(document.id);
+    if (!current || !current.path || !current.dirty || current.conflict) return;
+    void manager.saveDocument(document.id, "save");
+  });
+}
+
+async function maybeRestoreRecoveryDrafts(): Promise<void> {
+  if (!recovery.available) return;
+  const drafts = await recovery.list();
+  if (drafts.length === 0) return;
+  const result = await openRecoveryDialog({ entries: drafts });
+  if (result.action === "cancel") return;
+  if (result.action === "discard") {
+    if (result.entry?.id) await recovery.discard(result.entry.id);
+    else await recovery.discardAll();
+    return;
+  }
+  await manager.restoreRecovery({
+    id: result.entry.id,
+    path: result.entry.path ?? "",
+    content: result.entry.content ?? "",
+    encoding: result.entry.encoding ?? "UTF-8",
+    lineEnding: result.entry.lineEnding ?? "LF",
+    exists: result.entry.exists !== false,
+  });
+  // The draft stays on disk until a successful save; it is the crash-safe copy.
+  refreshChrome();
+  getEditor()?.focus();
+}
+
+/* --------------------------- external modification ------------------------ */
+
+function startExternalChangeMonitor(): void {
+  if (!isFileStampAvailable()) return;
+  const tick = (): void => {
+    void pollExternalChanges().finally(() => {
+      if (closingForQuit) return;
+      window.setTimeout(tick, EXTERNAL_POLL_MS);
+    });
+  };
+  window.setTimeout(tick, EXTERNAL_POLL_MS);
+}
+
+async function pollExternalChanges(): Promise<void> {
+  if (pollInFlight || closingForQuit || !manager) return;
+  pollInFlight = true;
   try {
-    const result = await openPath(path);
-    cancelAutosave();
-    applyDocument(result);
-  } catch (err) {
-    console.error("open path failed:", err);
-    showToast(t("error.openFailed") + errorMessage(err), "error");
+    const changes = await manager.detectExternalChanges();
+    for (const change of changes) {
+      if (!manager.get(change.id)) continue;
+      if (change.dirty) {
+        await resolveFileConflict(change.id);
+      } else {
+        const staleDraft = manager.get(change.id)?.recoveryId ?? "";
+        const reloaded = await manager.reloadFromDisk(change.id);
+        if (reloaded && staleDraft) void recovery.discard(staleDraft);
+        refreshChrome();
+      }
+    }
+  } catch (error) {
+    console.warn("external-change poll failed:", error);
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+async function resolveFileConflict(id: string): Promise<void> {
+  if (conflictDialogs.has(id) || !manager.get(id)) return;
+  conflictDialogs.add(id);
+  try {
+    const document = manager.get(id);
+    if (!document) return;
+    const decision: ConflictDecision = await openConflictDialog({
+      fileName: document.path ? baseName(document.path) : t("status.untitled"),
+      path: document.path,
+      dirty: document.dirty,
+    });
+    const current = manager.get(id);
+    if (!current) return;
+    switch (decision) {
+      case "keepLocal":
+        // The current disk version becomes the baseline, so the next save is
+        // allowed to replace it.
+        await manager.keepLocal(id);
+        scheduleAutoSave(manager.get(id));
+        scheduleRecovery(manager.get(id));
+        break;
+      case "reload": {
+        const staleDraft = current.recoveryId;
+        const reloaded = await manager.reloadFromDisk(id);
+        if (reloaded && staleDraft) void recovery.discard(staleDraft);
+        break;
+      }
+      case "saveAs":
+        await manager.saveDocument(id, "saveAs");
+        break;
+      case "cancel":
+        manager.cancelConflict(id);
+        autoSaver.cancel(id);
+        break;
+    }
+  } catch (error) {
+    console.warn("conflict resolution failed:", error);
+  } finally {
+    conflictDialogs.delete(id);
+    refreshChrome();
+  }
+}
+
+/* ----------------------------- encoding actions --------------------------- */
+
+async function reopenActiveWithEncoding(encoding: EncodingChoice): Promise<void> {
+  const document = manager.active;
+  if (!document || !document.path) return;
+  if (document.dirty) {
+    const decision = await confirmUnsavedChanges(
+      document.path ? baseName(document.path) : t("status.untitled"),
+    );
+    if (decision === "cancel") return;
+    if (decision === "save" && !(await manager.saveDocument(document.id, "save"))) return;
+  }
+  const staleDraft = document.recoveryId;
+  if (await manager.reopenWithEncoding(document.id, encoding)) {
+    if (staleDraft) void recovery.discard(staleDraft);
+    refreshChrome();
+    getEditor()?.focus();
+  }
+}
+
+async function saveActiveWithEncoding(encoding: EncodingChoice): Promise<void> {
+  const document = manager.active;
+  if (!document) return;
+  await manager.saveWithEncoding(document.id, encoding);
+  refreshChrome();
+}
+
+/** File ▸ Open with Encoding… choices (labels match the Go canonical names). */
+const OPEN_WITH_ENCODINGS = [
+  "UTF-8",
+  "UTF-8 BOM",
+  "UTF-16LE",
+  "UTF-16BE",
+  "GB18030",
+] as const;
+
+async function openWithEncoding(encoding: string): Promise<void> {
+  try {
+    const content = await openFileWithEncoding(encoding);
+    manager.openContent(content);
+    refreshChrome();
+    getEditor()?.focus();
+  } catch (error) {
+    if ((error as DOMException | undefined)?.name === "AbortError") return;
+    console.error("open with encoding failed:", error);
+    showToast(
+      t("error.openFailed") + (error instanceof Error ? error.message : String(error)),
+      "error",
+    );
   }
 }
 
 /* ----------------------------- file operations ---------------------------- */
 
-async function onNew(): Promise<void> {
-  if (!(await prepareToReplaceDocument())) return;
-  cancelAutosave();
-  resetFileHandle();
-  applyDocument({
-    path: null,
-    content: "",
-    encoding: "UTF-8",
-    line_ending: "lf",
-  });
+function onNew(): void {
+  manager.createBlank(true);
+  getEditor()?.focus();
 }
 
 async function onOpen(): Promise<void> {
-  if (!(await prepareToReplaceDocument())) return;
-  try {
-    const result = await openFile();
-    cancelAutosave();
-    applyDocument(result);
-  } catch (err) {
-    // "cancelled" is the Tauri signal when the user dismisses the dialog; in
-    // browser mode an AbortError is thrown instead. Both are expected.
-    if (!isCancel(err)) {
-      console.error("open failed:", err);
-      showToast(t("error.openFailed") + errorMessage(err), "error");
-    }
-  }
+  if (await manager.openFromPicker()) getEditor()?.focus();
 }
 
 async function onSave(): Promise<boolean> {
-  const model = getModel();
-  if (!model) return false;
-  if (currentPath) return flushAutosave();
-
-  try {
-    const savedTo = await saveFile(currentPath, contentForDisk(model.getValue()));
-    applySavedPath(savedTo);
-    dirty = false;
-    saveState = "saved";
-    syncNativeDocumentState();
-    refreshChrome();
-    return true;
-  } catch (err) {
-    if (!isCancel(err)) {
-      console.error("save failed:", err);
-      saveState = "error";
-      refreshChrome();
-      showToast(t("error.saveFailed") + errorMessage(err), "error");
-    }
-    return false;
-  }
+  return manager.saveActive("save");
 }
 
 async function onSaveAs(): Promise<boolean> {
-  const model = getModel();
-  if (!model) return false;
-  cancelAutosave();
-  if (saveInFlight) await saveInFlight;
-  try {
-    const savedTo = await saveAsFile(contentForDisk(model.getValue()));
-    applySavedPath(savedTo);
-    dirty = false;
-    saveState = "saved";
-    syncNativeDocumentState();
-    refreshChrome();
-    return true;
-  } catch (err) {
-    if (!isCancel(err)) {
-      console.error("save as failed:", err);
-      saveState = "error";
-      refreshChrome();
-      showToast(t("error.saveFailed") + errorMessage(err), "error");
-    }
-    return false;
-  }
+  return manager.saveActive("saveAs");
 }
 
-function applyDocument(result: FileContent): void {
-  const model = getModel();
-  const editor = getEditor();
-  if (!model) return;
+async function closeActiveTab(): Promise<void> {
+  await manager.closeActive();
+  getEditor()?.focus();
+}
 
-  programmaticModelChange = true;
-  currentPath = result.path;
-  currentEncoding = result.encoding || "UTF-8";
-  currentLineEnding = result.line_ending.toUpperCase() as "LF" | "CRLF" | "CR";
-  dirty = false;
-  saveState = currentPath ? "saved" : "idle";
-  currentSyntax = currentPath ? detectSyntaxByPath(currentPath) : null;
-  model.setValue(result.content);
-  model.setEOL(
-    result.line_ending === "crlf"
-      ? monaco.editor.EndOfLineSequence.CRLF
-      : monaco.editor.EndOfLineSequence.LF,
-  );
-  setModelLanguageByPath(currentPath, currentSyntax ?? undefined);
-  editor?.setPosition({ lineNumber: 1, column: 1 });
-  editor?.revealLine(1);
-  programmaticModelChange = false;
+async function closeDocument(id: string): Promise<void> {
+  const closed = await manager.closeDocument(id);
+  if (closed) getEditor()?.focus();
+}
 
-  // Preview mode is only valid for Markdown. When the new document is not
-  // markdown, drop out of preview so we never show a stale render; when it
-  // is markdown, refresh the preview pane if it happens to be open.
-  if (currentSyntax !== "Markdown") {
-    if (viewMode === "preview") {
+async function openRecent(path: string): Promise<void> {
+  const opened = await manager.openPath(path);
+  if (opened) {
+    getEditor()?.focus();
+    return;
+  }
+  // A recent entry that no longer opens (deleted/moved/permission) is pruned.
+  removeRecentFile(path);
+}
+
+function onSyntaxChange(syntax: string | null): void {
+  const document = manager.active;
+  if (!document) return;
+  manager.setSyntax(document.id, syntax);
+  if (syntax !== "Markdown" && viewMode !== "edit") setViewMode("edit");
+  syncOutline();
+  refreshChrome();
+}
+
+function previewModeActive(): boolean {
+  return viewMode === "preview" || viewMode === "split";
+}
+
+/**
+ * Switch the editor/preview panel for the active document. Preview is only
+ * valid for Markdown; every document switch re-checks that invariant.
+ *
+ * `preview` is the original full-screen Reading View, `split` keeps the editor
+ * visible; both share the same renderer and handlers.
+ */
+function setViewMode(mode: ViewMode): void {
+  const document = manager.active;
+  if (!document || mode === viewMode) return;
+  if (mode !== "edit" && manager.syntaxFor(document.id) !== "Markdown") return;
+  viewMode = mode;
+  if (mode === "preview") {
+    renderPreview(document.model.getValue());
+    showPreview();
+  } else if (mode === "split") {
+    renderPreview(document.model.getValue());
+    showPreviewSplit();
+  } else {
+    hidePreview();
+    queueMicrotask(() => getEditor()?.focus());
+  }
+  relayoutEditor();
+  refreshChrome();
+}
+
+function reconcilePreviewForActive(): void {
+  const document = manager.active;
+  if (!document || manager.syntaxFor(document.id) !== "Markdown") {
+    if (viewMode !== "edit") {
       viewMode = "edit";
       hidePreview();
+      relayoutEditor();
     }
-  } else if (viewMode === "preview") {
-    renderPreview(result.content);
+    return;
   }
-
-  syncNativeDocumentState();
-  refreshChrome();
-  editor?.focus();
-}
-
-function applySavedPath(savedTo: string): void {
-  currentPath = savedTo;
-  currentSyntax = detectSyntaxByPath(savedTo);
-  setModelLanguageByPath(savedTo, currentSyntax ?? undefined);
-}
-
-async function prepareToReplaceDocument(): Promise<boolean> {
-  if (!dirty) return true;
-
-  // Existing files should normally never interrupt the user: finish the live
-  // save immediately before switching documents. Only fall back to the dialog
-  // when the write failed.
-  if (currentPath && (await flushAutosave())) return true;
-
-  const name = currentPath ? baseName(currentPath) : t("status.untitled");
-  const decision = await confirmUnsavedChanges(name);
-  if (decision === "cancel") return false;
-  if (decision === "discard") return true;
-  return onSave();
-}
-
-function scheduleAutosave(): void {
-  cancelAutosave();
-  autosaveTimer = window.setTimeout(() => {
-    autosaveTimer = null;
-    void persistCurrentFile();
-  }, AUTOSAVE_DELAY_MS);
-}
-
-function cancelAutosave(): void {
-  if (autosaveTimer === null) return;
-  window.clearTimeout(autosaveTimer);
-  autosaveTimer = null;
-}
-
-async function flushAutosave(): Promise<boolean> {
-  cancelAutosave();
-  if (!currentPath || !dirty) return true;
-  return persistCurrentFile();
-}
-
-async function persistCurrentFile(): Promise<boolean> {
-  const model = getModel();
-  if (!model || !currentPath) return false;
-  if (!dirty) return true;
-
-  if (saveInFlight) {
-    await saveInFlight;
-    if (!dirty) return true;
-    return persistCurrentFile();
+  if (previewModeActive()) {
+    renderPreview(document.model.getValue());
+    if (viewMode === "split") showPreviewSplit();
+    else showPreview();
+    relayoutEditor();
   }
+}
 
-  const path = currentPath;
-  const content = contentForDisk(model.getValue());
-  const version = model.getVersionId();
-  let failed = false;
-  saveState = "saving";
-  refreshChrome();
+/** Re-render the preview after a theme/language change. */
+function rerenderPreview(): void {
+  const document = manager?.active;
+  if (!document || !previewModeActive()) return;
+  if (manager.syntaxFor(document.id) !== "Markdown") return;
+  renderPreview(document.model.getValue());
+}
 
-  const operation = (async (): Promise<boolean> => {
+/** Monaco observes its container; an explicit pass covers flex relayouts. */
+function relayoutEditor(): void {
+  window.requestAnimationFrame(() => {
     try {
-      await saveFile(path, content);
-      if (currentPath !== path) return false;
-      if (model.getVersionId() === version) {
-        dirty = false;
-        saveState = "saved";
-        syncNativeDocumentState();
-        refreshChrome();
-        return true;
-      }
-      // More edits landed during the write. Keep the dirty state and let the
-      // caller schedule one coalesced follow-up write with the latest content.
-      return false;
-    } catch (err) {
-      failed = true;
-      dirty = true;
-      saveState = "error";
-      syncNativeDocumentState();
-      refreshChrome();
-      console.error("autosave failed:", err);
-      showToast(t("error.autosaveFailed") + errorMessage(err), "error");
-      return false;
+      getEditor()?.layout();
+    } catch (error) {
+      console.warn("editor layout failed:", error);
     }
-  })();
-
-  saveInFlight = operation;
-  const saved = await operation;
-  saveInFlight = null;
-
-  if (currentPath === path && dirty && !failed) scheduleAutosave();
-  return saved;
-}
-
-/** Heuristic: was the error just the user cancelling a picker? */
-function isCancel(err: unknown): boolean {
-  if (err === "cancelled") return true;
-  if (err instanceof DOMException && err.name === "AbortError") return true;
-  return false;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  return String(err);
-}
-
-function contentForDisk(content: string): string {
-  const lf = content.replace(/\r\n|\r/g, "\n");
-  if (currentLineEnding === "CRLF") return lf.replace(/\n/g, "\r\n");
-  if (currentLineEnding === "CR") return lf.replace(/\n/g, "\r");
-  return lf;
-}
-
-function syncNativeDocumentState(): void {
-  void setDocumentState(currentPath, dirty, getLang()).catch((err) => {
-    console.warn("failed to sync document state:", err);
   });
+}
+
+/* ------------------------------ preview wiring ---------------------------- */
+
+/**
+ * Install the native handlers the preview calls for document-relative content.
+ *
+ * Images are read through the Go asset bridge and returned as `data:` URLs;
+ * anything that cannot be read (no path, missing/oversized file, non-image
+ * MIME) resolves to `null`, which leaves the preview's visible "blocked" notice
+ * in place. Only relative references are resolved: URL schemes such as
+ * http(s), data and file are rejected here even if a caller bypasses the
+ * preview's own router.
+ *
+ * Relative `.md`/`.txt` links open in a tab through the document manager,
+ * which reuses an existing tab for the same path. `#anchors` and external URLs
+ * never reach this handler: `preview.ts` handles them first.
+ */
+function installPreviewHandlers(): void {
+  setPreviewResourceResolver((href, kind) => {
+    if (kind !== "image") return null;
+    const document = manager?.active;
+    if (!document?.path) return null;
+    const absolute = resolveDocumentReference(document.path, href);
+    if (!absolute) return null;
+    return readAssetDataUrl(absolute);
+  });
+
+  setPreviewLinkHandler((href) => {
+    const document = manager?.active;
+    if (!document?.path) return false;
+    const target = stripReferenceSuffix(href);
+    if (!target || !/\.(?:md|txt)$/i.test(target)) return false;
+    const absolute = resolveDocumentReference(document.path, target);
+    if (!absolute) return false;
+    // manager.openPath activates an existing tab for the same path, otherwise
+    // it opens a new one. Failures surface as the normal open-file toast.
+    void manager.openPath(absolute).catch((error) => {
+      console.warn("preview: could not open linked document:", absolute, error);
+    });
+    return true;
+  });
+}
+
+/**
+ * Read one preview asset through the Go bridge. Returns `null` (never throws)
+ * for unavailable bindings, read failures, non-image payloads and assets over
+ * the bridge limit; preview.ts then blocks the image with a notice.
+ */
+async function readAssetDataUrl(absolutePath: string): Promise<string | null> {
+  if (!isWails()) return null;
+  try {
+    const asset = await WailsApp.ReadAssetBase64(absolutePath);
+    const mime = typeof asset?.mime === "string" ? asset.mime.trim().toLowerCase() : "";
+    const data = typeof asset?.data === "string" ? asset.data : "";
+    const size = Number(asset?.size);
+    if (!/^image\/[a-z0-9.+-]+$/.test(mime)) return null;
+    if (Number.isFinite(size) && size > PREVIEW_MAX_ASSET_BYTES) return null;
+    if (!data || !/^[A-Za-z0-9+/=\r\n]+$/.test(data)) return null;
+    return `data:${mime};base64,${data.replace(/[\r\n]/g, "")}`;
+  } catch (error) {
+    console.warn("preview: asset could not be read:", absolutePath, error);
+    return null;
+  }
+}
+
+/** Drop a `?query`/`#fragment` suffix from a document reference. */
+function stripReferenceSuffix(href: string): string {
+  return (href ?? "").trim().replace(/[?#].*$/, "");
+}
+
+/**
+ * Resolve a relative reference written in a Markdown buffer against the
+ * document's own directory. Returns an absolute local path or `null` for
+ * empty input, URL schemes and malformed bases. Windows drive paths and POSIX
+ * paths are both understood; `.`/`..` segments are collapsed.
+ */
+function resolveDocumentReference(documentPath: string, rawHref: string): string | null {
+  const href = (rawHref ?? "").trim();
+  if (href === "" || href.startsWith("#") || href.startsWith("//")) return null;
+  // A URL scheme is never a local path; a drive letter (`C:\`) is.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !/^[a-z]:[\\/]/i.test(href)) return null;
+
+  let decoded = stripReferenceSuffix(href);
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // A malformed escape stays literal, matching typical shell behaviour.
+  }
+  decoded = decoded.trim();
+  if (decoded === "") return null;
+
+  const windows = /^[a-zA-Z]:[\\/]/.test(documentPath) || documentPath.startsWith("\\\\");
+  if (windows) {
+    if (documentPath.startsWith("\\\\")) return null; // UNC bases are out of scope.
+    const base = documentPath.replace(/\//g, "\\");
+    const target = decoded.replace(/\//g, "\\");
+    let combined: string;
+    if (/^[a-zA-Z]:[\\/]/.test(target)) {
+      combined = target;
+    } else if (target.startsWith("\\")) {
+      const drive = /^[a-zA-Z]:/.exec(base)?.[0];
+      if (!drive) return null;
+      combined = drive + target;
+    } else {
+      const index = base.lastIndexOf("\\");
+      if (index < 0) return null;
+      combined = `${base.slice(0, index)}\\${target}`;
+    }
+    return normalizeLocalPath(combined, true);
+  }
+
+  if (!documentPath.startsWith("/")) return null;
+  const target = decoded.replace(/\\/g, "/");
+  const combined = target.startsWith("/")
+    ? target
+    : `${documentPath.slice(0, documentPath.lastIndexOf("/"))}/${target}`;
+  return normalizeLocalPath(combined, false);
+}
+
+function normalizeLocalPath(path: string, windows: boolean): string | null {
+  const parts: string[] = [];
+  let prefix: string;
+  let rest: string;
+  if (windows) {
+    const drive = /^([a-zA-Z]:)/.exec(path);
+    if (!drive) return null;
+    prefix = drive[1].toUpperCase();
+    rest = path.slice(2);
+  } else {
+    if (!path.startsWith("/")) return null;
+    prefix = "/";
+    rest = path;
+  }
+  for (const part of rest.split(/[\\/]+/)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return windows
+    ? `${prefix}\\${parts.join("\\")}`
+    : `${prefix}${parts.join("/")}`;
+}
+
+/* --------------------------------- outline -------------------------------- */
+
+function initOutline(): void {
+  const host = document.getElementById("outline");
+  if (!host) return;
+  outlineHost = host;
+  outline = createOutline(host);
+  outline.onNavigate((line) => {
+    const editor = getEditor();
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const target = Math.min(Math.max(1, line), model.getLineCount());
+    editor.setPosition({ lineNumber: target, column: 1 });
+    editor.revealLineInCenter(target);
+    editor.focus();
+  });
+  applyOutlineWidth();
+  syncOutline();
+}
+
+function outlineShown(): boolean {
+  return !!manager?.active
+    && manager.activeSyntax() === "Markdown"
+    && currentSettings?.showOutline === true;
+}
+
+function applyOutlineWidth(): void {
+  if (!outlineHost) return;
+  const configured = currentSettings?.outlineWidth;
+  const width = typeof configured === "number" ? configured : DEFAULT_OUTLINE_WIDTH;
+  outlineHost.style.setProperty("--ce-outline-width", `${width}px`);
+}
+
+/** Show/hide and repopulate the outline for the active document. */
+function syncOutline(): void {
+  if (!outline || !outlineHost) return;
+  const show = outlineShown();
+  outlineHost.hidden = !show;
+  if (!show) return;
+  const document = manager.active;
+  if (!document) {
+    outlineHost.hidden = true;
+    return;
+  }
+  outline.update(document.model);
+  outline.setActiveLine(getEditor()?.getPosition()?.lineNumber ?? 1);
+}
+
+/** Coalesce keystroke-driven outline parses to one per frame. */
+function scheduleOutlineSync(): void {
+  if (outlineSyncFrame !== null) return;
+  outlineSyncFrame = window.requestAnimationFrame(() => {
+    outlineSyncFrame = null;
+    syncOutline();
+  });
+}
+
+/**
+ * Toggle the outline. The choice is persisted through settings; the
+ * subscription applies visibility and width. Non-Markdown documents keep the
+ * preference but hide the panel until a Markdown tab is active again.
+ */
+function toggleOutline(force?: boolean): void {
+  const next = typeof force === "boolean" ? force : currentSettings?.showOutline !== true;
+  if (next === (currentSettings?.showOutline === true)) {
+    syncOutline();
+    return;
+  }
+  saveSettings({ showOutline: next });
+  syncOutline();
+  relayoutEditor();
+}
+
+/* ------------------------------ find results ------------------------------ */
+
+/**
+ * Mount the standalone results list. Navigation moves the caret and selects the
+ * match; replacement is deliberately a preview-only callback (the document is
+ * never edited from this module).
+ */
+function initFindResults(): void {
+  const host = document.getElementById("find-results");
+  if (!host || findResults) return;
+  findResults = createFindResults(host, {
+    onNavigate: (range) => {
+      const editor = getEditor();
+      if (!editor) return;
+      editor.setSelection(range);
+      editor.revealRangeInCenterIfOutsideViewport(
+        range,
+        monaco.editor.ScrollType.Smooth,
+      );
+    },
+    // Preview seam only: the caller counts callback invocations, no edit is
+    // applied. See previewReplaceAll().
+    onReplace: () => undefined,
+  });
+}
+
+function selectedEditorText(): string {
+  const editor = getEditor();
+  const model = editor?.getModel();
+  const selection = editor?.getSelection();
+  if (!editor || !model || !selection || selection.isEmpty()) return "";
+  return model.getValueInRange(selection);
+}
+
+/**
+ * Find every occurrence of the selected text (or a prompted query) in the
+ * active document. Monaco's own Ctrl+F widget is left untouched.
+ */
+function findInDocumentAll(): void {
+  const document = manager?.active;
+  if (!document || !findResults) return;
+  setViewMode("edit");
+  let query = selectedEditorText();
+  if (!query || /[\r\n]/.test(query)) {
+    const answer = window.prompt(t("find.queryPrompt"), findAllQuery);
+    if (answer === null) return;
+    query = answer;
+  }
+  query = query.trim();
+  if (!query) {
+    findResults.clear();
+    return;
+  }
+  findAllQuery = query;
+  findResults.search(document.model, query, {
+    caseSensitive: false,
+    wholeWord: false,
+    regex: false,
+  });
+  getEditor()?.focus();
+}
+
+/**
+ * Non-destructive replacement preview: asks for the replacement text, invokes
+ * the module's per-match callback and reports the count. Nothing is written to
+ * the model, so undo/history and the save transaction are unaffected.
+ */
+function previewReplaceAll(): void {
+  if (!findResults || findResults.matchCount() === 0) return;
+  const replacement = window.prompt(t("find.replacePrompt"), "");
+  if (replacement === null) return;
+  const count = findResults.replaceAll(replacement);
+  showToast(t("find.replacePreview").replace("{count}", String(count)));
+}
+
+/**
+ * Persisted font-size step for View ▸ Zoom In/Out and Ctrl+= / Ctrl+-. The
+ * settings subscription applies the new value through applyEditorSettings.
+ */
+function adjustFontSize(delta: number): void {
+  const editor = getEditor();
+  if (!editor) return;
+  const current = currentSettings?.fontSize
+    ?? editor.getOption(monaco.editor.EditorOption.fontSize);
+  const next = Math.min(
+    SETTINGS_LIMITS.fontSize.max,
+    Math.max(SETTINGS_LIMITS.fontSize.min, current + delta),
+  );
+  if (next === current) return;
+  saveSettings({ fontSize: next });
+}
+
+/* ------------------------------ chrome labels ----------------------------- */
+
+function applyChromeLabels(): void {
+  document.documentElement.lang = getLang() === "zh" ? "zh-CN" : "en";
+  const set = (id: string, label: string): void => {
+    document.getElementById(id)?.setAttribute("aria-label", label);
+  };
+  set("toolbar", t("a11y.toolbar"));
+  set("workspace", t("a11y.workspace"));
+  set("editor", t("a11y.editor"));
+  set("find-results", t("a11y.findResults"));
+  set("statusbar", t("a11y.statusbar"));
+  outlineHost?.setAttribute("aria-label", t("a11y.outline"));
+}
+
+async function normalizeActiveLineEndings(): Promise<void> {
+  const document = manager.active;
+  if (!document || document.formatProtection !== "mixed") return;
+  if (!(await confirmNormalizeLineEndings())) return;
+  manager.normalizeLineEndings(document.id);
+  refreshChrome();
+  scheduleStatistics();
+  getEditor()?.focus();
+}
+
+/* -------------------------------- shortcuts ------------------------------- */
+
+function modalIsOpen(): boolean {
+  return !!document.querySelector('.ce-modal, [aria-modal="true"]');
+}
+
+function findInEditor(replace = false): void {
+  setViewMode("edit");
+  // setViewMode queues editor focus; run Find after that so its input keeps focus.
+  queueMicrotask(() => { if (replace) openReplace(); else openFind(); });
+}
+
+function registerShortcuts(): void {
+  window.addEventListener("compositionstart", () => { composing = true; }, true);
+  window.addEventListener("compositionend", () => { composing = false; }, true);
+  // Escape dismisses the find-results list from anywhere in the window. Leave
+  // Escape to Monaco while its own find widget is open, and to open modals.
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.isComposing || composing || modalIsOpen()) return;
+    if (!findResults?.isOpen()) return;
+    if (document.querySelector(".find-widget.visible")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    findResults.clear();
+  }, true);
+  window.addEventListener("keydown", (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    const key = e.key.toLowerCase();
+    if (e.isComposing || composing || e.keyCode === 229) {
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (modalIsOpen()) {
+      // Dialog inputs retain normal text shortcuts; file/tab/background
+      // commands must not escape their context.
+      const blocked = ["n", "o", "s", "e", "p", "f", "h", "w"].includes(key)
+        || key === "tab"
+        || /^[1-9]$/.test(key)
+        || (e.altKey && /^[1-9]$/.test(key));
+      if (blocked) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+      return;
+    }
+    if (e.ctrlKey === e.metaKey || e.defaultPrevented) return;
+
+    if (!e.altKey && key === "tab") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (!e.repeat) {
+        manager.cycle(e.shiftKey ? -1 : 1);
+        getEditor()?.focus();
+      }
+      return;
+    }
+    if (!e.altKey && !e.shiftKey && /^[1-9]$/.test(key)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (!e.repeat) {
+        manager.activateIndex(Number(key) - 1);
+        getEditor()?.focus();
+      }
+      return;
+    }
+
+    let command: (() => void) | undefined;
+    if (!e.altKey) {
+      if (key === "=" || key === "+") command = () => adjustFontSize(1);
+      else if (key === "-") command = () => adjustFontSize(-1);
+      else if (!e.shiftKey && key === "w") command = () => { void closeActiveTab(); };
+      else if (key === "s") command = () => { void (e.shiftKey ? onSaveAs() : onSave()); };
+      else if (!e.shiftKey && key === "n") command = onNew;
+      else if (!e.shiftKey && key === "o") command = () => { void onOpen(); };
+      else if (!e.shiftKey && key === "e" && manager.activeSyntax() === "Markdown") {
+        command = () => setViewMode(viewMode === "preview" ? "edit" : "preview");
+      } else if (e.shiftKey && key === "e" && manager.activeSyntax() === "Markdown") {
+        command = () => setViewMode(viewMode === "split" ? "edit" : "split");
+      } else if (e.shiftKey && key === "o" && manager.activeSyntax() === "Markdown") {
+        command = () => toggleOutline();
+      } else if (e.shiftKey && key === "f") {
+        command = findInDocumentAll;
+      } else if (key === "h" && e.shiftKey) {
+        command = () => { setViewMode("edit"); openMultipleReplacePanel(); };
+      } else if (!e.shiftKey && (key === "f" || key === "h") && viewMode === "preview") {
+        command = () => findInEditor(key === "h");
+      }
+    } else if (!e.shiftKey && key === "p") command = openSnippetManager;
+    if (!command) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (!e.repeat) command();
+  }, true);
+}
+
+/* --------------------------------- chrome --------------------------------- */
+
+function syncTabs(): void {
+  if (!tabs) return;
+  tabs.setTabs(manager.tabItems(), manager.activeId);
+}
+
+function updateTab(id: string): void {
+  if (!tabs) return;
+  const item = manager.tabItem(id);
+  if (item) tabs.updateTab(item);
 }
 
 function refreshChrome(): void {
   updateTitle();
   refreshStatusbar();
-  // The toolbar language <select> and the Edit/Preview toggle mirror
-  // `currentSyntax` and `viewMode`. Only re-render when either actually
-  // changes; this avoids rebuilding the toolbar (and dropping the open
-  // <select> dropdown / focus) on every keystroke that flows through
-  // refreshChrome via onDidChangeContent.
-  if (lastRenderedSyntax !== currentSyntax || lastRenderedMode !== viewMode) {
-    lastRenderedSyntax = currentSyntax;
+  const syntax = manager?.activeSyntax() ?? null;
+  if (lastRenderedSyntax !== syntax || lastRenderedMode !== viewMode) {
+    lastRenderedSyntax = syntax;
     lastRenderedMode = viewMode;
     renderToolbar();
   }
 }
 
-function refreshStatusbar(line?: number, column?: number): void {
-  const model = getModel();
-  const pos = getEditor()?.getPosition();
-  const cursorLine = line ?? pos?.lineNumber ?? 1;
-  const cursorColumn = column ?? pos?.column ?? 1;
-  const value = model?.getValue() ?? "";
-  const cursorOffset = model
-    ? model.getOffsetAt({ lineNumber: cursorLine, column: cursorColumn })
-    : 0;
-
-  updateStatusbar({
-    path: currentPath,
-    dirty,
-    line: cursorLine,
-    column: cursorColumn,
-    syntax: currentSyntax,
-    encoding: currentEncoding,
-    lineEnding: currentLineEnding,
-    saveState,
-    lineCount: model?.getLineCount() ?? 1,
-    characterCount: model?.getValueLength() ?? 0,
-    cursorOffset,
-    byteSize: new TextEncoder().encode(contentForDisk(value)).byteLength,
-  });
+function statisticsKeyFor(id: string): string {
+  const document = manager.get(id);
+  if (!document) return "";
+  return `${id}:${document.model.getVersionId()}:${document.formatVersion}`;
 }
 
-/**
- * Apply a manual language override chosen from the toolbar switcher.
- *
- * Unlike file detection, this does not look at the path - it sets whatever the
- * user picked, so e.g. a `.txt` can be highlighted as Python. The model's
- * `onDidChangeLanguage` hook re-seeds the tree-sitter / regex highlighters
- * automatically. `null` resets to plaintext.
- *
- * Preview mode is only valid for Markdown; switching away from Markdown
- * forces the view back to edit so a stale preview pane is never shown.
- */
-function onSyntaxChange(syntax: string | null): void {
-  currentSyntax = syntax;
-  setModelLanguageBySyntax(syntax);
-  if (syntax !== "Markdown" && viewMode === "preview") {
-    setViewMode("edit");
-  }
-  refreshStatusbar();
-  refreshChrome();
-}
-
-/**
- * Switch between the Monaco editor and the markdown preview panel.
- *
- * Entering preview renders the current buffer once and hides the editor;
- * leaving preview refocuses the editor. The toolbar is refreshed so the
- * segmented toggle reflects the new mode. No-op when the requested mode
- * equals the current one, or when preview is requested for a non-markdown
- * buffer (the toggle UI hides that case, but this guards menu/shortcut
- * entry points too).
- */
-function setViewMode(mode: ViewMode): void {
-  if (mode === viewMode) return;
-  if (mode === "preview" && currentSyntax !== "Markdown") return;
-  viewMode = mode;
-  if (mode === "preview") {
-    const model = getModel();
-    renderPreview(model?.getValue() ?? "");
-    showPreview();
-  } else {
-    hidePreview();
-    queueMicrotask(() => getEditor()?.focus());
-  }
-  refreshChrome();
-}
-
-/* -------------------------------- shortcuts ------------------------------- */
-
-function registerShortcuts(): void {
-  // Window-level keydown for the Ctrl-based file shortcuts. Monaco handles
-  // its own editor shortcuts (find, multi-cursor, etc.) separately.
-  window.addEventListener("keydown", (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    switch (e.key.toLowerCase()) {
-      case "o":
-        e.preventDefault();
-        void onOpen();
-        break;
-      case "s":
-        e.preventDefault();
-        if (e.shiftKey) void onSaveAs();
-        else void onSave();
-        break;
-      case "n":
-        e.preventDefault();
-        void onNew();
-        break;
-      case "p":
-        if (e.altKey) {
-          e.preventDefault();
-          openSnippetManager();
-        }
-        break;
-      case "e":
-        // Toggle Edit/Preview for markdown buffers (mirrors the View menu
-        // item and the toolbar segmented control).
-        if (currentSyntax === "Markdown") {
-          e.preventDefault();
-          setViewMode(viewMode === "edit" ? "preview" : "edit");
-        }
-        break;
+/** Throttled, version-cached full-text work; never called from cursor movement. */
+function scheduleStatistics(): void {
+  if (statisticsTimer !== null) return;
+  statisticsTimer = window.setTimeout(() => {
+    statisticsTimer = null;
+    const document = manager.active;
+    if (!document) return;
+    const key = statisticsKeyFor(document.id);
+    const cached = statisticsCache.get(document.id);
+    if (cached?.key === key) {
+      refreshStatusbar();
+      return;
     }
+    const value = document.model.getValue();
+    let characterCount = 0;
+    if (/^[\x00-\x7F]*$/.test(value)) {
+      characterCount = value.length - (value.match(/\r\n/g)?.length ?? 0);
+    } else if (segmenter) {
+      for (const _segment of segmenter.segment(value)) characterCount++;
+    } else {
+      for (const _point of value) characterCount++;
+    }
+    statisticsCache.set(document.id, {
+      key,
+      characterCount,
+      byteSize: new TextEncoder().encode(
+        document.protectedOriginal ?? contentForDisk(document),
+      ).byteLength,
+    });
+    refreshStatusbar();
+  }, STATISTICS_DELAY_MS);
+}
+
+function refreshStatusbar(): void {
+  const document = manager?.active;
+  const model = document?.model ?? null;
+  const pos = getEditor()?.getPosition() ?? { lineNumber: 1, column: 1 };
+  const key = document ? statisticsKeyFor(document.id) : "";
+  const cached = document ? statisticsCache.get(document.id) : undefined;
+  const pending = !cached || cached.key !== key;
+  updateStatusbar({
+    path: document?.path ?? null,
+    dirty: document?.dirty ?? false,
+    line: pos.lineNumber,
+    column: pos.column,
+    syntax: document ? manager.syntaxFor(document.id) : null,
+    encoding: document?.encoding ?? "UTF-8",
+    lineEnding: document?.formatProtection === "mixed"
+      ? "MIXED"
+      : document?.lineEnding ?? "LF",
+    saveState: document?.saveState ?? "idle",
+    lineCount: model?.getLineCount() ?? 1,
+    characterCount: pending ? null : cached!.characterCount,
+    characterKind: segmenter ? "graphemes" : "codePoints",
+    cursorOffset: model?.getOffsetAt(pos) ?? 0,
+    byteSize: pending ? null : cached!.byteSize,
+    readOnlyReason: document?.formatProtection
+      ? t(document.formatProtection === "mixed"
+        ? "format.mixedReadOnly" : "format.unsupportedReadOnly")
+      : null,
+    onNormalize: document?.formatProtection === "mixed"
+      ? () => { void normalizeActiveLineEndings(); }
+      : undefined,
+    onEncodingReopen: reopenEncodingHandler,
+    onEncodingSave: saveEncodingHandler,
+    encodingEnabled: !!document,
   });
 }
 
 function updateTitle(): void {
-  const name = currentPath ? baseName(currentPath) : t("status.untitled");
-  const marker = dirty ? " ·" : "";
-  document.title = `${name}${marker} - ${t("title.app")}`;
+  const active = manager?.active;
+  const name = active?.path ? baseName(active.path) : t("status.untitled");
+  const marker = active?.dirty ? " ·" : "";
+  const title = `${name}${marker} - ${t("title.app")}`;
+  if (document.title === title) return;
+  document.title = title;
+  if (isWails()) WailsRuntime.WindowSetTitle(title);
 }
 
-function baseName(p: string): string {
-  const norm = p.replace(/\\/g, "/");
+function baseName(path: string): string {
+  const norm = path.replace(/\\/g, "/");
   const idx = norm.lastIndexOf("/");
   return idx >= 0 ? norm.slice(idx + 1) : norm;
 }
 
 /* --------------------------------- menus ---------------------------------- */
 
+function buildFileItems(): MenuItem[] {
+  const items: MenuItem[] = [
+    { id: "new", label: t("file.new"), shortcut: "Ctrl+N", run: onNew },
+    { id: "open", label: t("file.open"), shortcut: "Ctrl+O", run: () => { void onOpen(); } },
+    {
+      id: "openWithEncoding",
+      label: t("file.openWithEncoding"),
+      submenu: OPEN_WITH_ENCODINGS.map((encoding) => ({
+        id: `openEncoding-${encoding}`,
+        label: encoding,
+        run: () => { void openWithEncoding(encoding); },
+      })),
+    },
+    { id: "save", label: t("file.save"), shortcut: "Ctrl+S", run: () => { void onSave(); } },
+    { id: "saveAs", label: t("file.saveAs"), shortcut: "Ctrl+Shift+S", run: () => { void onSaveAs(); } },
+    { id: "closeTab", label: t("file.closeTab"), shortcut: "Ctrl+W", run: () => { void closeActiveTab(); } },
+    { sep: true },
+    {
+      id: "autoSave",
+      label: t("file.autoSave"),
+      checked: currentSettings?.autoSave === true,
+      run: () => {
+        // saveSettings persists immediately and notifies the live gate.
+        saveSettings({ autoSave: !loadSettings().autoSave });
+      },
+    },
+    { sep: true },
+    { label: t("file.openRecent"), disabled: true },
+  ];
+  const recent = listRecentFiles();
+  if (recent.length === 0) {
+    items.push({ label: t("file.noRecent"), disabled: true });
+  } else {
+    recent.forEach((path, index) => {
+      items.push({
+        id: `recent-${index}`,
+        label: path,
+        run: () => openRecent(path),
+      });
+    });
+  }
+  return items;
+}
+
 /**
- * Build the top-level menu bar.
- *
- * Groups every command surface into File / Edit / View / Format / Find /
- * Snippet / Theme / Language / Help. Format and Find items dispatch to the
- * Monaco actions registered by `line-commands.ts`; Theme items rebuild on each
- * open so the checkmark tracks the active selection. All labels are i18n-driven
- * via `t()`, so the whole bar is rebuilt on a language switch (see `bootstrap`).
+ * Build the Edit menu. It is rebuilt on open so "Preview Replace All" can
+ * reflect whether the results list currently holds matches.
+ */
+function buildEditItems(): MenuItem[] {
+  return [
+    { label: t("edit.undo"), run: () => getEditor()?.trigger("menu", "undo", null), shortcut: "Ctrl+Z" },
+    { label: t("edit.redo"), run: () => getEditor()?.trigger("menu", "redo", null), shortcut: "Ctrl+Y" },
+    { sep: true },
+    { label: t("edit.cut"), monacoAction: "editor.action.clipboardCutAction", shortcut: "Ctrl+X" },
+    { label: t("edit.copy"), monacoAction: "editor.action.clipboardCopyAction", shortcut: "Ctrl+C" },
+    { label: t("edit.paste"), monacoAction: "editor.action.clipboardPasteAction", shortcut: "Ctrl+V" },
+    { sep: true },
+    { label: t("edit.selectAll"), monacoAction: "editor.action.selectAll", shortcut: "Ctrl+A" },
+    { label: t("edit.find"), run: () => findInEditor(), shortcut: "Ctrl+F" },
+    { label: t("edit.findAll"), run: findInDocumentAll, shortcut: "Ctrl+Shift+F" },
+    { label: t("edit.replace"), run: () => findInEditor(true), shortcut: "Ctrl+H" },
+    {
+      id: "findReplacePreview",
+      label: t("edit.replaceAllPreview"),
+      disabled: (findResults?.matchCount() ?? 0) === 0,
+      run: previewReplaceAll,
+    },
+    { label: t("edit.multipleReplace"), run: openMultipleReplacePanel, shortcut: "Ctrl+Shift+H" },
+  ];
+}
+
+/**
+ * Build the top-level menu bar. File is rebuilt on every open so the recent
+ * list always reflects the current MRU entries.
  */
 function buildMenuBar(): MenuBar {
   return [
     {
       label: t("menu.file"),
-      items: [
-        { id: "new", label: t("file.new"), shortcut: "Ctrl+N", run: () => void onNew() },
-        { id: "open", label: t("file.open"), shortcut: "Ctrl+O", run: () => void onOpen() },
-        { id: "save", label: t("file.save"), shortcut: "Ctrl+S", run: () => void onSave() },
-        { id: "saveAs", label: t("file.saveAs"), shortcut: "Ctrl+Shift+S", run: () => void onSaveAs() },
-      ],
+      items: [],
+      buildItems: buildFileItems,
     },
     {
       label: t("menu.edit"),
-      items: [
-        { label: t("edit.undo"), monacoAction: "undo", shortcut: "Ctrl+Z" },
-        { label: t("edit.redo"), monacoAction: "redo", shortcut: "Ctrl+Y" },
-        { sep: true },
-        { label: t("edit.cut"), monacoAction: "editor.action.clipboardCutAction", shortcut: "Ctrl+X" },
-        { label: t("edit.copy"), monacoAction: "editor.action.clipboardCopyAction", shortcut: "Ctrl+C" },
-        { label: t("edit.paste"), monacoAction: "editor.action.clipboardPasteAction", shortcut: "Ctrl+V" },
-        { sep: true },
-        { label: t("edit.selectAll"), monacoAction: "editor.action.selectAll", shortcut: "Ctrl+A" },
-        { label: t("edit.find"), run: openFind, shortcut: "Ctrl+F" },
-        { label: t("edit.replace"), run: openReplace, shortcut: "Ctrl+H" },
-        { label: t("edit.multipleReplace"), run: openMultipleReplacePanel, shortcut: "Ctrl+Shift+H" },
-      ],
+      items: [],
+      buildItems: buildEditItems,
     },
     {
       label: t("menu.view"),
-      items: [
-        {
-          label: t("view.lineNumbers"),
-          monacoAction: "editor.action.toggleLineNumbers",
-        },
-        {
-          label: t("view.renderWhitespace"),
-          run: () => {
-            const ed = getEditor();
-            if (!ed) return;
-            // Read the current renderWhitespace setting and flip between
-            // "selection" (the default) and "all".
-            const raw = (ed.getOption as unknown as (id: number) => unknown)(85);
-            ed.updateOptions({
-              renderWhitespace: raw === "all" ? "selection" : "all",
-            });
-          },
-        },
-        {
-          label: t("view.wordWrap"),
-          monacoAction: "editor.action.toggleWordWrap",
-        },
-        { sep: true },
-        // Built fresh on each open so `disabled` and `checked` track the
-        // live syntax / mode - the static `items` array would freeze them at
-        // menu-bar build time (language switch) and drift out of sync.
-      ],
+      items: [],
       buildItems: (): MenuItem[] => [
         {
           label: t("view.lineNumbers"),
-          monacoAction: "editor.action.toggleLineNumbers",
-        },
-        {
-          label: t("view.renderWhitespace"),
+          checked: getEditor()?.getOption(monaco.editor.EditorOption.lineNumbers).renderType !== monaco.editor.RenderLineNumbersType.Off,
           run: () => {
             const ed = getEditor();
             if (!ed) return;
-            const raw = (ed.getOption as unknown as (id: number) => unknown)(85);
-            ed.updateOptions({
-              renderWhitespace: raw === "all" ? "selection" : "all",
-            });
+            const off = ed.getOption(monaco.editor.EditorOption.lineNumbers).renderType === monaco.editor.RenderLineNumbersType.Off;
+            // Persisted through settings; the subscription applies it back to
+            // every editor instance through applyEditorSettings.
+            saveSettings({ lineNumbers: off });
+          },
+        },
+        {
+          label: t("view.renderWhitespace"),
+          checked: getEditor()?.getOption(monaco.editor.EditorOption.renderWhitespace) === "all",
+          run: () => {
+            const ed = getEditor();
+            if (!ed) return;
+            const raw = ed.getOption(monaco.editor.EditorOption.renderWhitespace);
+            saveSettings({ renderWhitespace: raw === "all" ? "selection" : "all" });
           },
         },
         {
           label: t("view.wordWrap"),
-          monacoAction: "editor.action.toggleWordWrap",
+          checked: getEditor()?.getOption(monaco.editor.EditorOption.wordWrap) !== "off",
+          run: () => {
+            const ed = getEditor();
+            if (!ed) return;
+            const wrapped = ed.getOption(monaco.editor.EditorOption.wordWrap) !== "off";
+            saveSettings({ wordWrap: wrapped ? "off" : "on" });
+          },
         },
         { sep: true },
         {
           label: t("view.togglePreview"),
           shortcut: "Ctrl+E",
-          // Only meaningful for markdown buffers; disabled otherwise so the
-          // menu item stays visible (discoverable) but non-interactive.
-          disabled: currentSyntax !== "Markdown",
-          checked: currentSyntax === "Markdown" && viewMode === "preview",
-          run: () =>
-            setViewMode(viewMode === "edit" ? "preview" : "edit"),
+          disabled: manager?.activeSyntax() !== "Markdown",
+          checked: manager?.activeSyntax() === "Markdown" && viewMode === "preview",
+          run: () => setViewMode(viewMode === "preview" ? "edit" : "preview"),
+        },
+        {
+          label: t("view.toggleSplit"),
+          shortcut: "Ctrl+Shift+E",
+          disabled: manager?.activeSyntax() !== "Markdown",
+          checked: manager?.activeSyntax() === "Markdown" && viewMode === "split",
+          run: () => setViewMode(viewMode === "split" ? "edit" : "split"),
+        },
+        {
+          label: t("view.toggleOutline"),
+          shortcut: "Ctrl+Shift+O",
+          disabled: manager?.activeSyntax() !== "Markdown",
+          checked: currentSettings?.showOutline === true,
+          run: () => toggleOutline(),
         },
         { sep: true },
-        { label: t("view.zoomIn"), monacoAction: "editor.action.fontZoomIn", shortcut: "Ctrl++" },
-        { label: t("view.zoomOut"), monacoAction: "editor.action.fontZoomOut", shortcut: "Ctrl+-" },
+        {
+          id: "viewAutoSave",
+          label: t("file.autoSave"),
+          checked: currentSettings?.autoSave === true,
+          run: () => {
+            saveSettings({ autoSave: !loadSettings().autoSave });
+          },
+        },
+        { label: t("view.zoomIn"), shortcut: "Ctrl++", run: () => adjustFontSize(1) },
+        { label: t("view.zoomOut"), shortcut: "Ctrl+-", run: () => adjustFontSize(-1) },
       ],
     },
     {
@@ -731,27 +1428,13 @@ function buildMenuBar(): MenuBar {
       label: t("menu.snippet"),
       items: [
         { label: t("snippet.manage"), run: openSnippetManager, shortcut: "Ctrl+Alt+P" },
-        {
-          label: t("snippet.insert") + " 1",
-          run: () => insertSnippetByIndex(0),
-          shortcut: "Ctrl+Alt+1",
-        },
-        {
-          label: t("snippet.insert") + " 2",
-          run: () => insertSnippetByIndex(1),
-          shortcut: "Ctrl+Alt+2",
-        },
-        {
-          label: t("snippet.insert") + " 3",
-          run: () => insertSnippetByIndex(2),
-          shortcut: "Ctrl+Alt+3",
-        },
+        { label: t("snippet.insert") + " 1", run: () => insertSnippetByIndex(0), shortcut: "Ctrl+Alt+1" },
+        { label: t("snippet.insert") + " 2", run: () => insertSnippetByIndex(1), shortcut: "Ctrl+Alt+2" },
+        { label: t("snippet.insert") + " 3", run: () => insertSnippetByIndex(2), shortcut: "Ctrl+Alt+3" },
       ],
     },
     {
       label: t("menu.theme"),
-      // Built fresh on each open so the active theme's checkmark tracks the
-      // current selection even after a switch.
       items: [],
       buildItems: () =>
         listThemes().map((name) => ({
@@ -760,13 +1443,12 @@ function buildMenuBar(): MenuBar {
           checked: name === getCurrentTheme(),
           run: () => {
             applyTheme(name);
+            rerenderPreview();
           },
         })),
     },
     {
       label: t("menu.language"),
-      // The two supported UI languages; checkmark tracks the active one. Built
-      // fresh on each open so the mark stays correct after a switch.
       items: [],
       buildItems: (): MenuItem[] =>
         (["zh", "en"] as Lang[]).map((lang) => ({
@@ -779,20 +1461,13 @@ function buildMenuBar(): MenuBar {
     {
       label: t("menu.help"),
       items: [
-        {
-          label: t("help.about"),
-          run: () => alert(t("about.body")),
-        },
-        {
-          label: t("help.shortcuts"),
-          run: showShortcuts,
-        },
+        { label: t("help.about"), run: () => alert(t("about.body")) },
+        { label: t("help.shortcuts"), run: showShortcuts },
       ],
     },
   ];
 }
 
-/** Insert a snippet from the stored list by 0-based index (menu helper). */
 function insertSnippetByIndex(i: number): void {
   import("./ui/snippet-manager").then(({ getSnippets, insertSnippetById }) => {
     const list = getSnippets();
@@ -800,7 +1475,6 @@ function insertSnippetByIndex(i: number): void {
   });
 }
 
-/** Show a static shortcuts reference dialog. */
 function showShortcuts(): void {
   alert(
     [
@@ -809,6 +1483,8 @@ function showShortcuts(): void {
       t("sc.file"),
       t("sc.edit"),
       t("sc.multi"),
+      t("sc.tabs"),
+      t("sc.preview"),
       "",
       t("sc.format"),
       t("sc.sortLines"),
@@ -826,10 +1502,144 @@ function showShortcuts(): void {
   );
 }
 
-// refreshRegexTokens is re-exported by highlight-regex for engines that need
-// to re-tint on theme switch; keep the import referenced so the scaffold stays
-// type-clean.
-void isWails;
+/* ---------------------------- native window events ------------------------- */
+
+function registerNativeEvents(): void {
+  if (!isWails()) return;
+  WailsRuntime.EventsOn("app:open-path", (path: unknown) => {
+    if (typeof path !== "string" || path === "") return;
+    void manager.openPath(path).then((opened) => { if (opened) getEditor()?.focus(); });
+  });
+  WailsRuntime.EventsOn("app:open-paths", (paths: unknown) => {
+    if (!Array.isArray(paths)) return;
+    void openExternalPaths(paths.filter((path): path is string => typeof path === "string"));
+  });
+  WailsRuntime.EventsOn("app:request-close", () => { void handleRequestClose(); });
+}
+
+/**
+ * Native file drop (Wails only, bound once).
+ *
+ * The Go side already forwards drops as `app:open-paths`; the runtime callback
+ * is registered as well because Wails builds may deliver either path. Both
+ * funnel into openExternalPaths(), which collapses duplicate deliveries of the
+ * same path. The DOM listeners only add the drop-target affordance and a
+ * best-effort fallback for hosts that expose File.path; ordinary HTML5 drags
+ * (tabs use pointer events) are never intercepted.
+ */
+function registerFileDrop(): void {
+  if (fileDropBound || !isWails()) return;
+  fileDropBound = true;
+
+  const runtime = WailsRuntime as unknown as {
+    OnFileDrop?: (
+      callback: (x: number, y: number, paths: string[]) => void,
+      useDropTarget?: boolean,
+    ) => void;
+  };
+  if (typeof runtime.OnFileDrop === "function") {
+    try {
+      runtime.OnFileDrop((_x, _y, paths) => {
+        if (!Array.isArray(paths)) return;
+        const files = paths.filter(
+          (path): path is string => typeof path === "string" && path !== "",
+        );
+        if (files.length > 0) void openExternalPaths(files);
+      }, false);
+    } catch (error) {
+      console.warn("native file drop is unavailable:", error);
+    }
+  }
+
+  const app = document.getElementById("app");
+  if (!app) return;
+  let depth = 0;
+  const hasFiles = (event: DragEvent): boolean =>
+    Array.from(event.dataTransfer?.types ?? []).includes("Files");
+  const clear = (): void => {
+    depth = 0;
+    app.classList.remove("ce-file-drop-target");
+  };
+
+  window.addEventListener("dragenter", (event) => {
+    if (!hasFiles(event)) return;
+    depth += 1;
+    app.classList.add("ce-file-drop-target");
+  });
+  window.addEventListener("dragover", (event) => {
+    if (!hasFiles(event)) return;
+    // Only file drags are claimed; internal pointer-based drags are untouched.
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", (event) => {
+    if (!hasFiles(event)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) clear();
+  });
+  window.addEventListener("drop", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    clear();
+    const paths: string[] = [];
+    for (const file of Array.from(event.dataTransfer?.files ?? [])) {
+      const path = (file as File & { path?: string }).path;
+      if (typeof path === "string" && path !== "") paths.push(path);
+    }
+    if (paths.length > 0) void openExternalPaths(paths);
+  });
+}
+
+async function openExternalPaths(paths: string[]): Promise<void> {
+  for (const path of paths) {
+    if (path === "" || openingPaths.has(path)) continue;
+    openingPaths.add(path);
+    try {
+      await manager.openPath(path);
+    } finally {
+      openingPaths.delete(path);
+    }
+  }
+  getEditor()?.focus();
+}
+
+/**
+ * beforeClose cancels the native close while the session is dirty and emits
+ * app:request-close. Resolve every dirty tab here, then quit explicitly.
+ */
+async function handleRequestClose(): Promise<void> {
+  if (closingForQuit) return;
+  closingForQuit = true;
+  autoSaver.cancelAll();
+  try {
+    // Persist the newest drafts before asking about saves: a crash during the
+    // close flow must still leave a recoverable copy of every dirty buffer.
+    await recovery.flush();
+    const names = manager.dirtyNames();
+    if (names.length > 0) {
+      const decision = await confirmCloseSession(names);
+      if (decision === "cancel") return;
+      if (decision === "save") {
+        await recovery.flush();
+        if (!(await manager.saveAllDirty())) return;
+        if (manager.anyDirty()) return;
+      } else {
+        await recovery.discardAll();
+      }
+    } else {
+      await recovery.discardAll();
+    }
+    // runtime.Quit runs OnBeforeClose again. Clear the guard first so a
+    // discard path is not vetoed by the sessionDirty flag it just resolved.
+    await setSessionDirty(false);
+    WailsRuntime.Quit();
+  } finally {
+    closingForQuit = false;
+  }
+}
+
+// Keep the scaffold's highlighting seam referenced (theme refresh is a no-op
+// until a theme switch asks for it).
 void refreshRegexTokens;
 
 bootstrap().catch((err) => {

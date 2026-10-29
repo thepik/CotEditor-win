@@ -10,14 +10,22 @@
     <!-- Monaco mounts here; toolbar and panels are inserted around it by main.ts -->
     <div id="app">
       <div id="menubar" class="ce-menubar"></div>
-      <div id="toolbar" class="toolbar"></div>
-      <div id="editor" class="editor-host">
-        <!-- Monaco mounts as a sibling; preview panel toggles in/out of view -->
-        <div id="preview" class="preview-host" hidden>
-          <div class="preview-body"></div>
+      <div id="toolbar" class="toolbar" role="toolbar" aria-label="Main toolbar"></div>
+      <div id="tabs" class="tabs-host"></div>
+      <!-- The workspace keeps the outline beside the editor. In split preview
+           mode the preview becomes a second column inside #editor. -->
+      <div id="workspace" class="workspace" role="main" aria-label="Editor workspace">
+        <div id="editor" class="editor-host" role="region" aria-label="Editor">
+          <!-- Monaco mounts as a sibling; preview panel toggles in/out of view -->
+          <div id="preview" class="preview-host" hidden>
+            <div class="preview-body"></div>
+          </div>
+          <!-- Independent find-results list (overlay; never affects layout). -->
+          <div id="find-results" class="find-results-host" aria-label="Find results"></div>
         </div>
+        <aside id="outline" class="outline-host" aria-label="Outline" hidden></aside>
       </div>
-      <div id="statusbar" class="statusbar"></div>
+      <div id="statusbar" class="statusbar" aria-label="Status bar"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

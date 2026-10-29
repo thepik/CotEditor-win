@@ -1,0 +1,183 @@
+/* Independent find-results list. All selectors are scoped under the
+   `ce-find-results-` prefix (root: `.ce-find-results`) so the module can be
+   dropped into any panel without leaking styles. Colours reuse the app's
+   `--ce-*` tokens, with fallbacks for standalone use. */
+
+.ce-find-results {
+  --ce-find-results-bg: var(--ce-surface, #ffffff);
+  --ce-find-results-fg: var(--ce-fg, #202124);
+  --ce-find-results-muted: var(--ce-muted, #666b73);
+  --ce-find-results-line: var(--ce-subtle, #8a9099);
+  --ce-find-results-border: var(--ce-border, #d9dde3);
+  --ce-find-results-hover: var(--ce-hover, #e9ebef);
+  --ce-find-results-active: var(--ce-active, #dde1e7);
+  --ce-find-results-mark: #ffe08a;
+  --ce-find-results-mark-fg: #3a2c00;
+
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  max-height: 60vh;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid var(--ce-find-results-border);
+  border-radius: var(--ce-radius, 6px);
+  background: var(--ce-find-results-bg);
+  box-shadow: var(--ce-shadow, 0 10px 30px rgba(20, 28, 40, 0.16));
+  color: var(--ce-find-results-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ce-find-results[hidden],
+.ce-find-results-status[hidden] {
+  display: none;
+}
+
+.ce-find-results-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  border-bottom: 1px solid var(--ce-find-results-border);
+  background: var(--ce-toolbar-bg, #f7f8fa);
+}
+
+.ce-find-results-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ce-find-results-muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ce-find-results-close {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ce-find-results-muted);
+  cursor: default;
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.ce-find-results-close:hover {
+  background: var(--ce-find-results-hover);
+  color: var(--ce-find-results-fg);
+}
+
+.ce-find-results-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ce-accent, #0f6cbd) 72%, transparent);
+  outline-offset: -1px;
+}
+
+.ce-find-results-status {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--ce-find-results-border);
+  color: var(--ce-find-results-muted);
+}
+
+.ce-find-results-status[data-kind="error"] {
+  background: var(--ce-danger-soft, #fde7e5);
+  color: var(--ce-danger, #c42b1c);
+  font-family: Consolas, "Cascadia Code", "Courier New", monospace;
+  overflow-wrap: anywhere;
+}
+
+.ce-find-results-status[data-kind="truncated"] {
+  color: var(--ce-warning, #9d5d00);
+}
+
+.ce-find-results-status[data-kind="empty"],
+.ce-find-results-status[data-kind="cancelled"],
+.ce-find-results-status[data-kind="stale"] {
+  color: var(--ce-find-results-muted);
+  font-style: italic;
+}
+
+.ce-find-results-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0;
+  scrollbar-width: thin;
+}
+
+.ce-find-results-item {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  width: 100%;
+  margin: 0;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+  font: inherit;
+  text-align: left;
+}
+
+.ce-find-results-item:hover {
+  background: var(--ce-find-results-hover);
+}
+
+.ce-find-results-item:focus-visible,
+.ce-find-results-item[aria-selected="true"] {
+  background: var(--ce-find-results-active);
+  outline: none;
+}
+
+.ce-find-results-item:focus-visible {
+  box-shadow: inset 2px 0 0 var(--ce-accent, #0f6cbd);
+}
+
+.ce-find-results-line {
+  flex: 0 0 auto;
+  min-width: 4ch;
+  padding-right: 1px;
+  border-right: 1px solid var(--ce-find-results-border);
+  color: var(--ce-find-results-line);
+  font-family: Consolas, "Cascadia Code", "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ce-find-results-context {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-family: Consolas, "Cascadia Code", "Courier New", monospace;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.ce-find-results-match {
+  border-radius: 2px;
+  background: var(--ce-find-results-mark);
+  color: var(--ce-find-results-mark-fg);
+  font-weight: 600;
+}
+
+:root[data-ce-theme="dark"] .ce-find-results {
+  --ce-find-results-mark: #6b5510;
+  --ce-find-results-mark-fg: #ffe9a8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-ce-theme="light"]) .ce-find-results {
+    --ce-find-results-mark: #6b5510;
+    --ce-find-results-mark-fg: #ffe9a8;
+  }
+}

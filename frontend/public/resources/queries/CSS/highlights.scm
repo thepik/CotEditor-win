@@ -37,8 +37,8 @@
   "@keyframes"
   "@media"
   "@namespace"
-  "@scope"
   "@supports"
+  ; This grammar represents @scope (and other generic at-rules) as at_keyword.
   (at_keyword)
   (to)
   (from)

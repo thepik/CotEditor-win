@@ -29,8 +29,18 @@ func main() {
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        app.startup,
-		OnBeforeClose:    app.beforeClose,
+		// startupWithDragDrop wraps app.startup and registers the Go-side
+		// listener for dropped paths (see dragdrop.go).
+		OnStartup:     app.startupWithDragDrop,
+		OnBeforeClose: app.beforeClose,
+		// Enable Wails' native file-drop bridge (v2.13.0 field: options.DragAndDrop;
+		// there is no options.OnFileDrop callback). The Go listener registered in
+		// startupWithDragDrop filters dropped paths and emits "app:open-paths"; the
+		// frontend tab layer decides what to open. DisableWebViewDrop stays false
+		// because it would also suppress Wails' drop events and this bridge.
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop: true,
+		},
 		Bind: []interface{}{
 			app,
 		},

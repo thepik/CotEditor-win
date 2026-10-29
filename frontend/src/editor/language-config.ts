@@ -14,12 +14,13 @@
 import type * as monaco from "monaco-editor";
 import { monaco as monacoNs, getModel } from "./monaco-setup";
 import { detectSyntaxByPath } from "../lib/syntax-map";
+import { warnHighlightOnce } from "./highlight-common";
 
 /** Edit.json structure (subset relevant to language config). */
 export interface CotEditJson {
   comment?: {
-    inlines?: { delimiter?: string }[];
-    blocks?: { begin?: string; end?: string }[];
+    inlines?: { begin?: string }[];
+    blocks?: { begin?: string; end?: string; isNestable?: boolean }[];
   };
   stringDelimiters?: {
     begin?: string;
@@ -99,17 +100,18 @@ export const SUPPORTED_SYNTAXES: string[] = Object.keys(SYNTAX_TO_MONACO).sort(
  * Called once at boot from main.ts. Safe to await there before the editor is
  * interacted with.
  */
-export async function attachLanguage(): Promise<void> {
-  await Promise.all(
+let attachPromise: Promise<void> | undefined;
+export function attachLanguage(): Promise<void> {
+  return attachPromise ??= Promise.all(
     Object.entries(SYNTAX_TO_MONACO).map(async ([syntax, monacoId]) => {
       try {
         const edit = await loadEditJson(syntax);
         registerLanguageConfig(monacoId, edit);
       } catch (err) {
-        console.warn(`Failed to load Edit.json for ${syntax}:`, err);
+        warnHighlightOnce(`language-config:${syntax}`, err);
       }
     }),
-  );
+  ).then(() => {});
 }
 
 /** Fetch and parse a `.cotsyntax/Edit.json`.
@@ -132,8 +134,8 @@ function registerLanguageConfig(
 ): void {
   const config: monaco.languages.LanguageConfiguration = {};
 
-  // Comments.
-  const inlineDelim = edit.comment?.inlines?.[0]?.delimiter;
+  // Resource schema uses begin, not delimiter.
+  const inlineDelim = edit.comment?.inlines?.[0]?.begin;
   if (inlineDelim) {
     config.comments = {
       lineComment: inlineDelim,
